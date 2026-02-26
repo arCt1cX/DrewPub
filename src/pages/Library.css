@@ -1,0 +1,166 @@
+/* ─── Library Page ───────────────────────────────────── */
+
+.library-page {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+}
+
+.library-page.drag-over {
+    pointer-events: none;
+}
+
+.library-content {
+    flex: 1;
+    padding: 24px;
+    overflow-y: auto;
+}
+
+/* ─── Grid View ──────────────────────────────────────── */
+
+.library-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 24px 16px;
+}
+
+@media (min-width: 700px) {
+    .library-grid {
+        grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+        gap: 28px 20px;
+    }
+}
+
+@media (min-width: 1024px) {
+    .library-grid {
+        grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+        gap: 32px 24px;
+    }
+}
+
+/* ─── List View ──────────────────────────────────────── */
+
+.library-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+/* ─── Empty State ────────────────────────────────────── */
+
+.library-empty {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 48px 24px;
+    gap: 16px;
+    min-height: 50vh;
+}
+
+.empty-illustration {
+    animation: float 4s ease-in-out infinite;
+    margin-bottom: 8px;
+}
+
+.empty-title {
+    font-size: 1.4rem;
+    font-weight: 600;
+    color: var(--text);
+}
+
+.empty-desc {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    line-height: 1.6;
+    max-width: 320px;
+}
+
+/* ─── Loading State ──────────────────────────────────── */
+
+.library-loading {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    min-height: 50vh;
+    color: var(--text-secondary);
+}
+
+.spinner {
+    width: 36px;
+    height: 36px;
+    border: 3px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* ─── Upload Overlay ─────────────────────────────────── */
+
+.upload-overlay {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 200;
+    background: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+}
+
+.upload-modal {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+    padding: 32px 48px;
+    border-radius: var(--radius-lg);
+    color: var(--text);
+    font-weight: 500;
+}
+
+/* ─── Drag Overlay ───────────────────────────────────── */
+
+.drag-overlay {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 300;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    pointer-events: none;
+}
+
+.drag-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+    padding: 48px;
+    border: 2px dashed var(--accent);
+    border-radius: var(--radius-xl);
+    color: var(--text);
+    font-size: 1.1rem;
+    font-weight: 500;
+}
+
+.drag-icon {
+    font-size: 3rem;
+    animation: float 2s ease-in-out infinite;
+}
