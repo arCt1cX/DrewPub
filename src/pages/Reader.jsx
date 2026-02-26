@@ -128,6 +128,7 @@ export default function Reader() {
             height: '100%',
             flow: isPaginated ? 'paginated' : 'scrolled',
             spread: 'none',
+            minSpreadWidth: 99999,
             manager: isPaginated ? 'default' : 'continuous',
         };
     }
@@ -233,19 +234,29 @@ export default function Reader() {
     function applyStyles(rendition, s) {
         const fontObj = FONTS.find(f => f.id === s.font) || FONTS[0];
         const theme = getTheme(s.theme, s.customTheme);
+        const isPag = s.readingMode !== 'scroll';
+
+        // In paginated mode, do NOT override padding/max-width on body:
+        // epub.js uses CSS columns for pagination and our overrides break
+        // the column-width calculation, causing extra partial columns.
+        const bodyStyles = {
+            'font-family': fontObj.family + ' !important',
+            'font-size': s.fontSize + 'px !important',
+            'line-height': s.lineHeight + ' !important',
+            'color': theme.readerText + ' !important',
+            'background': theme.readerBg + ' !important',
+            'text-align': s.textAlign + ' !important',
+        };
+
+        if (!isPag) {
+            // Scroll mode: apply padding and max-width normally
+            bodyStyles['padding'] = s.margins + 'px !important';
+            bodyStyles['max-width'] = s.maxWidth + 'px !important';
+            bodyStyles['margin'] = '0 auto !important';
+        }
 
         rendition.themes.default({
-            'body': {
-                'font-family': fontObj.family + ' !important',
-                'font-size': s.fontSize + 'px !important',
-                'line-height': s.lineHeight + ' !important',
-                'color': theme.readerText + ' !important',
-                'background': theme.readerBg + ' !important',
-                'text-align': s.textAlign + ' !important',
-                'padding': s.margins + 'px !important',
-                'max-width': s.maxWidth + 'px !important',
-                'margin': '0 auto !important',
-            },
+            'body': bodyStyles,
             'p': {
                 'margin-bottom': s.paragraphSpacing + 'px !important',
                 'font-family': 'inherit !important',
