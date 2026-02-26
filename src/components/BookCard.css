@@ -10,6 +10,7 @@
     user-select: none;
 }
 
+
 .book-card:hover {
     transform: translateY(-4px) scale(1.02);
     box-shadow: var(--shadow-lg);

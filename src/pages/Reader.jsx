@@ -298,43 +298,85 @@ export default function Reader() {
 
     const isPaginated = settings.readingMode !== 'scroll';
 
-    // ── Overlay touch/click handlers (PAGINATED mode only) ─
+    // ── Overlay touch/click handlers (BOTH modes) ─────────
     const overlayTouchRef = useRef(null);
+
+    // Helper: find the scrollable epub container for scroll mode
+    const getScrollContainer = useCallback(() => {
+        const viewer = viewerRef.current;
+        if (!viewer) return null;
+        // epub.js continuous manager creates a scrollable container
+        return viewer.querySelector('.epub-container') || viewer;
+    }, []);
 
     const handleOverlayTouchStart = useCallback((e) => {
         if (e.touches.length === 1) {
             overlayTouchRef.current = {
-                x: e.touches[0].clientX,
-                y: e.touches[0].clientY,
+                startX: e.touches[0].clientX,
+                startY: e.touches[0].clientY,
+                lastY: e.touches[0].clientY,
                 time: Date.now(),
+                moved: false,
             };
         }
     }, []);
 
+    const handleOverlayTouchMove = useCallback((e) => {
+        if (!overlayTouchRef.current) return;
+        const t = e.touches[0];
+        const dy = t.clientY - overlayTouchRef.current.lastY;
+        overlayTouchRef.current.lastY = t.clientY;
+
+        const totalDx = Math.abs(t.clientX - overlayTouchRef.current.startX);
+        const totalDy = Math.abs(t.clientY - overlayTouchRef.current.startY);
+
+        if (totalDx > 10 || totalDy > 10) {
+            overlayTouchRef.current.moved = true;
+        }
+
+        // In scroll mode: scroll the epub container
+        if (settingsRef.current.readingMode === 'scroll' && overlayTouchRef.current.moved) {
+            e.preventDefault();
+            const container = getScrollContainer();
+            if (container) {
+                container.scrollTop -= dy;
+            }
+        }
+    }, [getScrollContainer]);
+
     const handleOverlayTouchEnd = useCallback((e) => {
         if (!overlayTouchRef.current) return;
         const t = e.changedTouches[0];
-        const dx = Math.abs(t.clientX - overlayTouchRef.current.x);
-        const dy = Math.abs(t.clientY - overlayTouchRef.current.y);
+        const dx = Math.abs(t.clientX - overlayTouchRef.current.startX);
+        const dy = Math.abs(t.clientY - overlayTouchRef.current.startY);
         const dt = Date.now() - overlayTouchRef.current.time;
+        const wasMoved = overlayTouchRef.current.moved;
         overlayTouchRef.current = null;
 
-        if (dx > 20 || dy > 20 || dt > 400) return; // Not a tap
+        // Not a tap — it was a scroll/swipe gesture
+        if (wasMoved || dx > 20 || dy > 20 || dt > 400) return;
 
         e.preventDefault();
         e.stopPropagation();
 
+        const isCurrentlyPaginated = settingsRef.current.readingMode !== 'scroll';
         const viewerEl = viewerRef.current;
         if (!viewerEl) return;
         const rect = viewerEl.getBoundingClientRect();
         const x = t.clientX - rect.left;
         const zone = x / rect.width;
 
-        if (zone < 0.3) {
-            renditionRef.current?.prev();
-        } else if (zone > 0.7) {
-            renditionRef.current?.next();
+        if (isCurrentlyPaginated) {
+            // Paginated: zone-based navigation
+            if (zone < 0.3) {
+                renditionRef.current?.prev();
+            } else if (zone > 0.7) {
+                renditionRef.current?.next();
+            } else {
+                toggleControls();
+            }
         } else {
+            // Scroll: any tap toggles controls
             toggleControls();
         }
     }, [toggleControls]);
@@ -346,10 +388,16 @@ export default function Reader() {
         const x = e.clientX - rect.left;
         const zone = x / rect.width;
 
-        if (zone < 0.3) {
-            renditionRef.current?.prev();
-        } else if (zone > 0.7) {
-            renditionRef.current?.next();
+        const isCurrentlyPaginated = settingsRef.current.readingMode !== 'scroll';
+
+        if (isCurrentlyPaginated) {
+            if (zone < 0.3) {
+                renditionRef.current?.prev();
+            } else if (zone > 0.7) {
+                renditionRef.current?.next();
+            } else {
+                toggleControls();
+            }
         } else {
             toggleControls();
         }
@@ -385,12 +433,13 @@ export default function Reader() {
                 className={`reader-viewer ${isPaginated ? 'reader-paginated' : 'reader-scroll'}`}
             />
 
-            {/* TRANSPARENT OVERLAY for paginated mode — catches ALL touch/click */}
-            {!loading && isPaginated && (
+            {/* TRANSPARENT OVERLAY — catches ALL touch/click in BOTH modes */}
+            {!loading && (
                 <div
                     className="reader-touch-overlay"
                     onClick={handleOverlayClick}
                     onTouchStart={handleOverlayTouchStart}
+                    onTouchMove={handleOverlayTouchMove}
                     onTouchEnd={handleOverlayTouchEnd}
                 />
             )}
