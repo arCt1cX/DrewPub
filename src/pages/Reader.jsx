@@ -97,10 +97,10 @@ export default function Reader() {
         setDictPosition({ x, y });
         try {
             const resp = await fetch(
-                `https://api.mymemory.translated.net/get?q=${encodeURIComponent(word)}&langpair=en|it`
+                `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=it&dt=t&q=${encodeURIComponent(word)}`
             );
             const data = await resp.json();
-            const translated = data?.responseData?.translatedText;
+            const translated = data?.[0]?.[0]?.[0];
             if (translated && translated.toLowerCase() !== word.toLowerCase()) {
                 setDictTranslation(translated);
             } else {
