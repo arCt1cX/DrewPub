@@ -7,20 +7,22 @@ let dbPromise;
 
 function getDB() {
     if (!dbPromise) {
-        dbPromise = openDB(DB_NAME, DB_VERSION, {
-            upgrade(db) {
-                if (!db.objectStoreNames.contains('books')) {
+        dbPromise = openDB(DB_NAME, 2, { // Increment DB version to 2
+            upgrade(db, oldVersion, newVersion, transaction) {
+                if (oldVersion < 1) {
                     const bookStore = db.createObjectStore('books', { keyPath: 'id' });
                     bookStore.createIndex('title', 'title');
                     bookStore.createIndex('author', 'author');
                     bookStore.createIndex('addedAt', 'addedAt');
                     bookStore.createIndex('lastReadAt', 'lastReadAt');
-                }
-                if (!db.objectStoreNames.contains('positions')) {
+
                     db.createObjectStore('positions', { keyPath: 'bookId' });
-                }
-                if (!db.objectStoreNames.contains('settings')) {
                     db.createObjectStore('settings', { keyPath: 'key' });
+                }
+                if (oldVersion < 2) {
+                    if (!db.objectStoreNames.contains('assets')) {
+                        db.createObjectStore('assets', { keyPath: 'id' });
+                    }
                 }
             }
         });
@@ -100,24 +102,20 @@ export async function getAllSettings() {
     return map;
 }
 
-// ─── Assets ─────────────────────────────────────────
+// ─── Custom Assets (Fonts, Backgrounds) ─────────────
 
-export async function saveAsset(id, dataBlob) {
+export async function saveCustomAsset(id, blob) {
     const db = await getDB();
-    // We can just store them in settings for simplicity, or create a new store
-    // Let's create an 'assets' store in upgrade if we bump version, but to avoid bumping:
-    // we can just store them in settings as binary blobs with a prefix 'asset_'.
-    return db.put('settings', { key: `asset_${id}`, value: dataBlob });
+    return db.put('assets', { id, blob, updatedAt: Date.now() });
 }
 
-export async function getAsset(id) {
+export async function getCustomAsset(id) {
     const db = await getDB();
-    const result = await db.get('settings', `asset_${id}`);
-    return result?.value || null;
+    const result = await db.get('assets', id);
+    return result?.blob;
 }
 
-export async function deleteAsset(id) {
+export async function deleteCustomAsset(id) {
     const db = await getDB();
-    return db.delete('settings', `asset_${id}`);
+    return db.delete('assets', id);
 }
-

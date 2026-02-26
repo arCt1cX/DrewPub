@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import ePub from 'epubjs';
-import { getBook, savePosition, getPosition, updateBookMeta, getAsset } from '../db';
+import { getBook, savePosition, getPosition, updateBookMeta } from '../db';
 import { useSettings } from '../contexts/SettingsContext';
 import { FONTS, getTheme } from '../styles/themes';
 import ReaderControls from '../components/ReaderControls';
@@ -31,72 +31,18 @@ export default function Reader() {
     const [totalPages, setTotalPages] = useState(0);
     const [currentPage, setCurrentPage] = useState(0);
 
+    const [translationText, setTranslationText] = useState(null);
+    const [translationPos, setTranslationPos] = useState({ x: 0, y: 0 });
+
     const controlsTimerRef = useRef(null);
     const showControlsRef = useRef(true);
     const showSettingsRef = useRef(false);
     const showTocRef = useRef(false);
     const settingsRef = useRef(settings);
 
-    // ── Custom Assets State ─────────────────────────────
-    const [customFontUrl, setCustomFontUrl] = useState(null);
-    const [customBgUrl, setCustomBgUrl] = useState(null);
-    const customFontUrlRef = useRef(null);
-
-    useEffect(() => {
-        let active = true;
-        const loadAssets = async () => {
-            if (settings.customFontId) {
-                const blob = await getAsset('custom_font');
-                if (blob && active) {
-                    const url = URL.createObjectURL(blob);
-                    setCustomFontUrl(url);
-                    customFontUrlRef.current = url;
-                }
-            } else { setCustomFontUrl(null); customFontUrlRef.current = null; }
-
-            if (settings.customBgId) {
-                const blob = await getAsset('custom_bg');
-                if (blob && active) setCustomBgUrl(URL.createObjectURL(blob));
-            } else { setCustomBgUrl(null); }
-        };
-        loadAssets();
-        return () => { active = false; };
-    }, [settings.customFontId, settings.customBgId]);
-
     useEffect(() => { showControlsRef.current = showControls; }, [showControls]);
     useEffect(() => { showSettingsRef.current = showSettings; }, [showSettings]);
     useEffect(() => { showTocRef.current = showToc; }, [showToc]);
-
-    // ── Translation State ────────────────────────────────
-    const [translationData, setTranslationData] = useState(null);
-
-    const handleSelection = useCallback(async (cfiRange, contents) => {
-        try {
-            const range = contents.range(cfiRange);
-            const text = range.toString().trim();
-
-            // Only translate single words or short phrases (up to 3 words)
-            if (!text || text.split(/\s+/).length > 3) return;
-
-            setTranslationData({ text, translation: null, loading: true });
-
-            const res = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|it`);
-            const data = await res.json();
-
-            if (data.responseData?.translatedText) {
-                setTranslationData({ text, translation: data.responseData.translatedText, loading: false });
-            } else {
-                setTranslationData(null);
-            }
-
-            // Allow the user to see the highlight briefly, then you could clear it. 
-            // We'll leave the highlight until they tap away or close the popup.
-        } catch (e) {
-            console.error('Translation error:', e);
-            setTranslationData(null);
-        }
-    }, []);
-
     useEffect(() => { settingsRef.current = settings; }, [settings]);
 
     // ── Auto-hide controls ────────────────────────────────
@@ -142,28 +88,12 @@ export default function Reader() {
     // ── Attach events to rendition ────────────────────────
     const attachRenditionEvents = useCallback((rendition) => {
         rendition.on('keyup', handleKeyPress);
-        rendition.on('selected', handleSelection);
 
         // Clean up &nbsp; entities that show as literal text in some epubs
         rendition.hooks.content.register((contents) => {
             try {
                 const doc = contents.document;
                 if (!doc) return;
-
-                // Inject custom font if available
-                if (customFontUrlRef.current && !doc.getElementById('custom-user-font')) {
-                    const style = doc.createElement('style');
-                    style.id = 'custom-user-font';
-                    style.textContent = `
-                        @font-face {
-                            font-family: 'CustomUserFont';
-                            src: url('${customFontUrlRef.current}');
-                            font-display: swap;
-                        }
-                    `;
-                    doc.head.appendChild(style);
-                }
-
                 const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, null, false);
                 let node;
                 while ((node = walker.nextNode())) {
@@ -178,7 +108,35 @@ export default function Reader() {
                 }
             } catch (_) { /* ignore */ }
         });
-    }, [toggleControls, handleSelection]);
+
+        // Handle text selection for dictionary
+        rendition.on('selected', (cfiRange, contents) => {
+            const range = rendition.getRange(cfiRange);
+            const text = range.toString().trim();
+            if (!text || text.length > 50) return; // Ignore very long strings or empty
+
+            try {
+                // Get rect of the selection
+                const rect = range.getBoundingClientRect();
+                const iframeRect = viewerRef.current.querySelector('iframe').getBoundingClientRect();
+
+                // Position relative to viewport
+                const x = rect.left + iframeRect.left + (rect.width / 2);
+                const y = rect.top + iframeRect.top;
+
+                setTranslationText(text);
+                setTranslationPos({ x, y });
+            } catch (err) {
+                console.error("Selection rect error:", err);
+            }
+        });
+
+        // Hide translation on tap/click elsewhere or unselect
+        rendition.on('unselected', () => {
+            setTranslationText(null);
+        });
+
+    }, [toggleControls]);
 
     // ── Relocated handler ─────────────────────────────────
     const makeRelocatedHandler = useCallback((book, destroyed_getter) => (location) => {
@@ -265,7 +223,7 @@ export default function Reader() {
             }
             if (controlsTimerRef.current) clearTimeout(controlsTimerRef.current);
         };
-    }, [bookId, settings.readingMode, attachRenditionEvents, makeRelocatedHandler, showControlsTemporarily]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [bookId]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // ── Reapply styles on change ──────────────────────────
     useEffect(() => {
@@ -307,22 +265,98 @@ export default function Reader() {
         }
 
         return () => { localDestroyed = true; };
-    }, [settings.readingMode, loading, currentCfi, attachRenditionEvents, makeRelocatedHandler]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [settings.readingMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    function applyStyles(rendition, s) {
-        const fontObj = FONTS.find(f => f.id === s.font) || FONTS[0];
+    async function applyStyles(rendition, s) {
+        let fontFamily = '';
         const theme = getTheme(s.theme, s.customTheme);
         const isPag = s.readingMode !== 'scroll';
 
+        // 1. Handle Custom Font
+        if (s.font === 'custom' && s.customFontId) {
+            try {
+                const { getCustomAsset } = await import('../db');
+                const fontBlob = await getCustomAsset(s.customFontId);
+                if (fontBlob) {
+                    const fontUrl = URL.createObjectURL(fontBlob);
+                    const fontFaceRule = `
+                        @font-face {
+                            font-family: 'DrewPubCustom';
+                            src: url('${fontUrl}');
+                        }
+                    `;
+                    rendition.hooks.content.register((contents) => {
+                        contents.addStylesheetRules(fontFaceRule);
+                    });
+                    fontFamily = "'DrewPubCustom', sans-serif";
+                } else {
+                    fontFamily = FONTS[0].family;
+                }
+            } catch (err) {
+                console.error("Failed to load custom font from DB:", err);
+                fontFamily = FONTS[0].family;
+            }
+        } else {
+            const fontObj = FONTS.find(f => f.id === s.font) || FONTS[0];
+            fontFamily = fontObj.family;
+        }
+
+        // 2. Handle Custom Background
+        let mainBgColor = theme.readerBg;
+        let iframeBgColor = theme.readerBg;
+
+        if (s.customBackgroundId) {
+            try {
+                const { getCustomAsset } = await import('../db');
+                const bgBlob = await getCustomAsset(s.customBackgroundId);
+                if (bgBlob) {
+                    const bgUrl = URL.createObjectURL(bgBlob);
+                    // Set the image on the wrapper div via CSS variable
+                    document.documentElement.style.setProperty('--custom-bg-image', `url(${bgUrl})`);
+
+                    // Convert hex to rgb for rgba overlay
+                    let hex = theme.readerBg.replace('#', '');
+                    if (hex.length === 3) hex = hex.split('').map(c => c + c).join('');
+                    const r = parseInt(hex.substring(0, 2), 16) || 0;
+                    const g = parseInt(hex.substring(2, 4), 16) || 0;
+                    const b = parseInt(hex.substring(4, 6), 16) || 0;
+
+                    const opacity = s.backgroundOverlayOpacity ?? 0.8;
+                    // Iframe gets the translucent color, main wrapper becomes transparent so the image shows
+                    iframeBgColor = `rgba(${r}, ${g}, ${b}, ${opacity})`;
+                    mainBgColor = 'transparent';
+                } else {
+                    document.documentElement.style.removeProperty('--custom-bg-image');
+                }
+            } catch (e) {
+                console.error("Failed to load custom background from DB:", e);
+                document.documentElement.style.removeProperty('--custom-bg-image');
+            }
+        } else {
+            document.documentElement.style.removeProperty('--custom-bg-image');
+        }
+
+        // Apply background to main page
+        const readerPage = document.querySelector('.reader-page');
+        if (readerPage) {
+            if (s.customBackgroundId) {
+                readerPage.style.backgroundImage = 'var(--custom-bg-image)';
+                readerPage.style.backgroundSize = 'cover';
+                readerPage.style.backgroundPosition = 'center';
+                readerPage.style.backgroundAttachment = 'fixed';
+            } else {
+                readerPage.style.backgroundImage = 'none';
+                readerPage.style.backgroundColor = mainBgColor;
+            }
+        }
+
         // In paginated mode, do NOT override padding/max-width on body:
-        // epub.js uses CSS columns for pagination and our overrides break
-        // the column-width calculation, causing extra partial columns.
         const bodyStyles = {
-            'font-family': fontObj.family + ' !important',
+            'font-family': fontFamily + ' !important',
             'font-size': s.fontSize + 'px !important',
             'line-height': s.lineHeight + ' !important',
             'color': theme.readerText + ' !important',
-            'background': (s.customBgId ? 'transparent' : theme.readerBg) + ' !important',
+            'background': iframeBgColor + ' !important',
             'text-align': s.textAlign + ' !important',
         };
 
@@ -530,6 +564,13 @@ export default function Reader() {
     }, [toggleControls, startMomentum]);
 
     const handleOverlayClick = useCallback((e) => {
+        // Dismiss translation if open
+        if (translationText) {
+            setTranslationText(null);
+            renditionRef.current?.getContents()?.forEach(c => c.document.getSelection().removeAllRanges());
+            return;
+        }
+
         const viewerEl = viewerRef.current;
         if (!viewerEl) return;
         const rect = viewerEl.getBoundingClientRect();
@@ -552,22 +593,7 @@ export default function Reader() {
     }, [toggleControls]);
 
     return (
-        <div
-            className="reader-page"
-            style={customBgUrl ? { backgroundImage: `url(${customBgUrl})` } : {}}
-        >
-            {customFontUrl && (
-                <style>{`
-                    @font-face {
-                        font-family: 'CustomUserFont';
-                        src: url('${customFontUrl}');
-                        font-display: swap;
-                    }
-                `}</style>
-            )}
-
-            {customBgUrl && <div className="reader-bg-overlay" />}
-
+        <div className="reader-page">
             {loading ? (
                 <div className="reader-loading">
                     <div className="spinner" />
@@ -619,19 +645,6 @@ export default function Reader() {
                     onClose={() => setShowToc(false)}
                 />
             )}
-
-            <TranslationPopup
-                data={translationData}
-                onClose={() => {
-                    setTranslationData(null);
-                    // Clear selection in the iframe if possible
-                    if (renditionRef.current) {
-                        try {
-                            renditionRef.current.getContents()[0].document.getSelection().removeAllRanges();
-                        } catch (e) { }
-                    }
-                }}
-            />
         </div>
     );
 }
