@@ -16,6 +16,7 @@
     border-right: 1px solid var(--border);
 }
 
+
 @keyframes slideFromLeft {
     from {
         transform: translateX(-100%);
