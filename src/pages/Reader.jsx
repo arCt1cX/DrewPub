@@ -7,7 +7,7 @@ import { FONTS, getTheme } from '../styles/themes';
 import ReaderControls from '../components/ReaderControls';
 import SettingsPanel from '../components/SettingsPanel';
 import TableOfContents from '../components/TableOfContents';
-import TranslationPopup from '../components/TranslationPopup';
+import DictionaryPopup from '../components/DictionaryPopup';
 import './Reader.css';
 
 export default function Reader() {
@@ -31,8 +31,12 @@ export default function Reader() {
     const [totalPages, setTotalPages] = useState(0);
     const [currentPage, setCurrentPage] = useState(0);
 
-    const [translationText, setTranslationText] = useState(null);
-    const [translationPos, setTranslationPos] = useState({ x: 0, y: 0 });
+    // Dictionary popup state
+    const [dictWord, setDictWord] = useState(null);
+    const [dictTranslation, setDictTranslation] = useState(null);
+    const [dictLoading, setDictLoading] = useState(false);
+    const [dictPosition, setDictPosition] = useState({ x: 0, y: 0 });
+    const longPressTimerRef = useRef(null);
 
     const controlsTimerRef = useRef(null);
     const showControlsRef = useRef(true);
@@ -85,19 +89,48 @@ export default function Reader() {
         }
     }
 
+    // ── Translate word EN→IT ────────────────────────────────
+    const translateWord = useCallback(async (word, x, y) => {
+        setDictWord(word);
+        setDictTranslation(null);
+        setDictLoading(true);
+        setDictPosition({ x, y });
+        try {
+            const resp = await fetch(
+                `https://api.mymemory.translated.net/get?q=${encodeURIComponent(word)}&langpair=en|it`
+            );
+            const data = await resp.json();
+            const translated = data?.responseData?.translatedText;
+            if (translated && translated.toLowerCase() !== word.toLowerCase()) {
+                setDictTranslation(translated);
+            } else {
+                setDictTranslation(null);
+            }
+        } catch {
+            setDictTranslation(null);
+        } finally {
+            setDictLoading(false);
+        }
+    }, []);
+
+    const closeDictionary = useCallback(() => {
+        setDictWord(null);
+        setDictTranslation(null);
+    }, []);
+
     // ── Attach events to rendition ────────────────────────
     const attachRenditionEvents = useCallback((rendition) => {
         rendition.on('keyup', handleKeyPress);
 
-        // Clean up &nbsp; entities that show as literal text in some epubs
         rendition.hooks.content.register((contents) => {
             try {
                 const doc = contents.document;
                 if (!doc) return;
+
+                // Clean up &nbsp; entities
                 const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, null, false);
                 let node;
                 while ((node = walker.nextNode())) {
-                    // Replace literal .&nbsp;, standalone &nbsp; (string) or \u00a0 (char) with proper space
                     if (node.nodeValue && (node.nodeValue.includes('\u00a0') || node.nodeValue.includes('&nbsp;'))) {
                         node.nodeValue = node.nodeValue
                             .replace(/\.\u00a0/g, '. ')
@@ -106,37 +139,79 @@ export default function Reader() {
                             .replace(/&nbsp;/g, ' ');
                     }
                 }
+
+                // Disable iOS Safari native long-press behavior
+                const style = doc.createElement('style');
+                style.textContent = `
+                    * {
+                        -webkit-touch-callout: none !important;
+                        -webkit-user-select: none !important;
+                        user-select: none !important;
+                    }
+                `;
+                doc.head.appendChild(style);
+
+                // Long-press handler for dictionary
+                let lpTimer = null;
+                let lpStartX = 0, lpStartY = 0;
+
+                doc.addEventListener('touchstart', (e) => {
+                    if (e.touches.length !== 1) return;
+                    const t = e.touches[0];
+                    lpStartX = t.clientX;
+                    lpStartY = t.clientY;
+
+                    lpTimer = setTimeout(() => {
+                        // Get word under touch
+                        let range;
+                        if (doc.caretRangeFromPoint) {
+                            range = doc.caretRangeFromPoint(t.clientX, t.clientY);
+                        } else if (doc.caretPositionFromPoint) {
+                            const pos = doc.caretPositionFromPoint(t.clientX, t.clientY);
+                            if (pos) {
+                                range = doc.createRange();
+                                range.setStart(pos.offsetNode, pos.offset);
+                                range.collapse(true);
+                            }
+                        }
+
+                        if (range && range.startContainer.nodeType === Node.TEXT_NODE) {
+                            const textNode = range.startContainer;
+                            const text = textNode.textContent;
+                            const offset = range.startOffset;
+
+                            // Find word boundaries
+                            let start = offset, end = offset;
+                            while (start > 0 && /[a-zA-Z]/.test(text[start - 1])) start--;
+                            while (end < text.length && /[a-zA-Z]/.test(text[end])) end++;
+
+                            const word = text.substring(start, end).trim();
+                            if (word.length >= 2) {
+                                // Get screen position (iframe offset + touch position)
+                                const iframe = renditionRef.current?.manager?.container?.querySelector('iframe');
+                                const iframeRect = iframe?.getBoundingClientRect() || { left: 0, top: 0 };
+                                translateWord(word, iframeRect.left + t.clientX, iframeRect.top + t.clientY);
+                            }
+                        }
+                    }, 500);
+                }, { passive: true });
+
+                doc.addEventListener('touchmove', (e) => {
+                    if (!lpTimer) return;
+                    const t = e.touches[0];
+                    if (Math.abs(t.clientX - lpStartX) > 10 || Math.abs(t.clientY - lpStartY) > 10) {
+                        clearTimeout(lpTimer);
+                        lpTimer = null;
+                    }
+                }, { passive: true });
+
+                doc.addEventListener('touchend', () => {
+                    if (lpTimer) { clearTimeout(lpTimer); lpTimer = null; }
+                }, { passive: true });
+
             } catch (_) { /* ignore */ }
         });
-
-        // Handle text selection for dictionary
-        rendition.on('selected', (cfiRange, contents) => {
-            const range = rendition.getRange(cfiRange);
-            const text = range.toString().trim();
-            if (!text || text.length > 50) return; // Ignore very long strings or empty
-
-            try {
-                // Get rect of the selection
-                const rect = range.getBoundingClientRect();
-                const iframeRect = viewerRef.current.querySelector('iframe').getBoundingClientRect();
-
-                // Position relative to viewport
-                const x = rect.left + iframeRect.left + (rect.width / 2);
-                const y = rect.top + iframeRect.top;
-
-                setTranslationText(text);
-                setTranslationPos({ x, y });
-            } catch (err) {
-                console.error("Selection rect error:", err);
-            }
-        });
-
-        // Hide translation on tap/click elsewhere or unselect
-        rendition.on('unselected', () => {
-            setTranslationText(null);
-        });
-
-    }, [toggleControls]);
+    }, [toggleControls, translateWord]);
 
     // ── Relocated handler ─────────────────────────────────
     const makeRelocatedHandler = useCallback((book, destroyed_getter) => (location) => {
@@ -267,96 +342,19 @@ export default function Reader() {
         return () => { localDestroyed = true; };
     }, [settings.readingMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    async function applyStyles(rendition, s) {
-        let fontFamily = '';
+    function applyStyles(rendition, s) {
+        // Resolve font from built-in + custom fonts
+        const allFonts = [...FONTS, ...(s.customFonts || [])];
+        const fontObj = allFonts.find(f => f.id === s.font) || FONTS[0];
         const theme = getTheme(s.theme, s.customTheme);
         const isPag = s.readingMode !== 'scroll';
 
-        // 1. Handle Custom Font
-        if (s.font === 'custom' && s.customFontId) {
-            try {
-                const { getCustomAsset } = await import('../db');
-                const fontBlob = await getCustomAsset(s.customFontId);
-                if (fontBlob) {
-                    const fontUrl = URL.createObjectURL(fontBlob);
-                    const fontFaceRule = `
-                        @font-face {
-                            font-family: 'DrewPubCustom';
-                            src: url('${fontUrl}');
-                        }
-                    `;
-                    rendition.hooks.content.register((contents) => {
-                        contents.addStylesheetRules(fontFaceRule);
-                    });
-                    fontFamily = "'DrewPubCustom', sans-serif";
-                } else {
-                    fontFamily = FONTS[0].family;
-                }
-            } catch (err) {
-                console.error("Failed to load custom font from DB:", err);
-                fontFamily = FONTS[0].family;
-            }
-        } else {
-            const fontObj = FONTS.find(f => f.id === s.font) || FONTS[0];
-            fontFamily = fontObj.family;
-        }
-
-        // 2. Handle Custom Background
-        let mainBgColor = theme.readerBg;
-        let iframeBgColor = theme.readerBg;
-
-        if (s.customBackgroundId) {
-            try {
-                const { getCustomAsset } = await import('../db');
-                const bgBlob = await getCustomAsset(s.customBackgroundId);
-                if (bgBlob) {
-                    const bgUrl = URL.createObjectURL(bgBlob);
-                    // Set the image on the wrapper div via CSS variable
-                    document.documentElement.style.setProperty('--custom-bg-image', `url(${bgUrl})`);
-
-                    // Convert hex to rgb for rgba overlay
-                    let hex = theme.readerBg.replace('#', '');
-                    if (hex.length === 3) hex = hex.split('').map(c => c + c).join('');
-                    const r = parseInt(hex.substring(0, 2), 16) || 0;
-                    const g = parseInt(hex.substring(2, 4), 16) || 0;
-                    const b = parseInt(hex.substring(4, 6), 16) || 0;
-
-                    const opacity = s.backgroundOverlayOpacity ?? 0.8;
-                    // Iframe gets the translucent color, main wrapper becomes transparent so the image shows
-                    iframeBgColor = `rgba(${r}, ${g}, ${b}, ${opacity})`;
-                    mainBgColor = 'transparent';
-                } else {
-                    document.documentElement.style.removeProperty('--custom-bg-image');
-                }
-            } catch (e) {
-                console.error("Failed to load custom background from DB:", e);
-                document.documentElement.style.removeProperty('--custom-bg-image');
-            }
-        } else {
-            document.documentElement.style.removeProperty('--custom-bg-image');
-        }
-
-        // Apply background to main page
-        const readerPage = document.querySelector('.reader-page');
-        if (readerPage) {
-            if (s.customBackgroundId) {
-                readerPage.style.backgroundImage = 'var(--custom-bg-image)';
-                readerPage.style.backgroundSize = 'cover';
-                readerPage.style.backgroundPosition = 'center';
-                readerPage.style.backgroundAttachment = 'fixed';
-            } else {
-                readerPage.style.backgroundImage = 'none';
-                readerPage.style.backgroundColor = mainBgColor;
-            }
-        }
-
-        // In paginated mode, do NOT override padding/max-width on body:
         const bodyStyles = {
-            'font-family': fontFamily + ' !important',
+            'font-family': fontObj.family + ' !important',
             'font-size': s.fontSize + 'px !important',
             'line-height': s.lineHeight + ' !important',
             'color': theme.readerText + ' !important',
-            'background': iframeBgColor + ' !important',
+            'background': theme.readerBg + ' !important',
             'text-align': s.textAlign + ' !important',
         };
 
@@ -369,9 +367,6 @@ export default function Reader() {
 
         rendition.themes.default({
             'body': bodyStyles,
-            'p, span, div, li, td': {
-                'color': theme.readerText + ' !important',
-            },
             'p': {
                 'margin-bottom': s.paragraphSpacing + 'px !important',
                 'font-family': 'inherit !important',
@@ -401,69 +396,6 @@ export default function Reader() {
     // ── Overlay touch/click handlers (BOTH modes) ─────────
     const overlayTouchRef = useRef(null);
     const momentumRef = useRef({ velocity: 0, lastTime: 0, lastY: 0, animationFrame: null });
-    const longPressTimerRef = useRef(null);
-
-    // ── Document Word Selection (through overlay) ─────────
-    const getWordAtPoint = useCallback((clientX, clientY) => {
-        try {
-            const iframe = viewerRef.current?.querySelector('iframe');
-            if (!iframe) return null;
-            const iframeRect = iframe.getBoundingClientRect();
-            const x = clientX - iframeRect.left;
-            const y = clientY - iframeRect.top;
-
-            const doc = iframe.contentDocument || iframe.contentWindow?.document;
-            if (!doc) return null;
-
-            let range, textNode, offset;
-            if (doc.caretRangeFromPoint) {
-                range = doc.caretRangeFromPoint(x, y);
-                if (range) {
-                    textNode = range.startContainer;
-                    offset = range.startOffset;
-                }
-            } else if (doc.caretPositionFromPoint) {
-                const pos = doc.caretPositionFromPoint(x, y);
-                if (pos) {
-                    textNode = pos.offsetNode;
-                    offset = pos.offset;
-                }
-            }
-
-            if (textNode && textNode.nodeType === 3) {
-                const text = textNode.nodeValue;
-                let start = offset;
-                let end = offset;
-                // Match word characters + common accented characters
-                const isWordChar = (c) => /[\w\u00C0-\u024F\u1E00-\u1EFF\']/.test(c);
-
-                while (start > 0 && isWordChar(text[start - 1])) start--;
-                while (end < text.length && isWordChar(text[end])) end++;
-
-                const word = text.slice(start, end).trim();
-                // Reject if empty or too long
-                if (word.length > 0 && word.length < 50) {
-                    const wordRange = doc.createRange();
-                    wordRange.setStart(textNode, start);
-                    wordRange.setEnd(textNode, end);
-                    // Clear and apply strict selection to document
-                    const sel = doc.getSelection();
-                    sel?.removeAllRanges();
-                    sel?.addRange(wordRange);
-
-                    const rect = wordRange.getBoundingClientRect();
-                    return {
-                        word,
-                        x: rect.left + iframeRect.left + (rect.width / 2),
-                        y: rect.top + iframeRect.top
-                    };
-                }
-            }
-        } catch (err) {
-            console.error("Word selection failed:", err);
-        }
-        return null;
-    }, []);
 
     // Helper: find the scrollable epub container for scroll mode
     const getScrollContainer = useCallback(() => {
@@ -502,8 +434,6 @@ export default function Reader() {
 
     const handleOverlayTouchStart = useCallback((e) => {
         stopMomentum();
-        if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
-
         if (e.touches.length === 1) {
             const t = e.touches[0];
             overlayTouchRef.current = {
@@ -522,20 +452,8 @@ export default function Reader() {
             if (viewerRef.current) {
                 viewerRef.current.style.transition = 'none';
             }
-
-            // Start long press timer for dictionary (500ms)
-            longPressTimerRef.current = setTimeout(() => {
-                if (!overlayTouchRef.current?.moved) {
-                    if (navigator.vibrate) navigator.vibrate(50);
-                    const result = getWordAtPoint(t.clientX, t.clientY);
-                    if (result) {
-                        setTranslationText(result.word);
-                        setTranslationPos({ x: result.x, y: result.y });
-                    }
-                }
-            }, 500);
         }
-    }, [stopMomentum, getWordAtPoint]);
+    }, [stopMomentum]);
 
     const handleOverlayTouchMove = useCallback((e) => {
         if (!overlayTouchRef.current) return;
@@ -551,7 +469,6 @@ export default function Reader() {
 
         if (totalDx > 10 || totalDy > 10) {
             overlayTouchRef.current.moved = true;
-            if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
         }
 
         // Calculate instantaneous velocity for momentum
@@ -585,7 +502,6 @@ export default function Reader() {
     }, [getScrollContainer]);
 
     const handleOverlayTouchEnd = useCallback((e) => {
-        if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
         if (!overlayTouchRef.current) return;
         const t = e.changedTouches[0];
         const dx = Math.abs(t.clientX - overlayTouchRef.current.startX);
@@ -646,13 +562,6 @@ export default function Reader() {
     }, [toggleControls, startMomentum]);
 
     const handleOverlayClick = useCallback((e) => {
-        // Dismiss translation if open
-        if (translationText) {
-            setTranslationText(null);
-            renditionRef.current?.getContents()?.forEach(c => c.document.getSelection().removeAllRanges());
-            return;
-        }
-
         const viewerEl = viewerRef.current;
         if (!viewerEl) return;
         const rect = viewerEl.getBoundingClientRect();
@@ -673,14 +582,6 @@ export default function Reader() {
             toggleControls();
         }
     }, [toggleControls]);
-
-    const handleOverlayDoubleClick = useCallback((e) => {
-        const result = getWordAtPoint(e.clientX, e.clientY);
-        if (result) {
-            setTranslationText(result.word);
-            setTranslationPos({ x: result.x, y: result.y });
-        }
-    }, [getWordAtPoint]);
 
     return (
         <div className="reader-page">
@@ -706,6 +607,17 @@ export default function Reader() {
                 />
             )}
 
+            {/* Background image overlay */}
+            {settings.readerBgImage && (
+                <div
+                    className="reader-bg-image"
+                    style={{
+                        backgroundImage: `url(${settings.readerBgImage})`,
+                        opacity: settings.readerBgOpacity,
+                    }}
+                />
+            )}
+
             {/* epub.js renders into this div */}
             <div
                 ref={viewerRef}
@@ -717,13 +629,20 @@ export default function Reader() {
                 <div
                     className="reader-touch-overlay"
                     onClick={handleOverlayClick}
-                    onDoubleClick={handleOverlayDoubleClick}
                     onTouchStart={handleOverlayTouchStart}
                     onTouchMove={handleOverlayTouchMove}
                     onTouchEnd={handleOverlayTouchEnd}
-                    onContextMenu={(e) => {
-                        e.preventDefault(); // Prevents iOS Safari showing a default popup/select all on this overlay
-                    }}
+                />
+            )}
+
+            {/* Dictionary Popup */}
+            {dictWord && (
+                <DictionaryPopup
+                    word={dictWord}
+                    translation={dictTranslation}
+                    loading={dictLoading}
+                    position={dictPosition}
+                    onClose={closeDictionary}
                 />
             )}
 

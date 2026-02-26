@@ -21,6 +21,25 @@ export function SettingsProvider({ children }) {
                 }
                 // Also load customTheme if saved
                 if (saved.customTheme) merged.customTheme = saved.customTheme;
+                // Load custom fonts
+                if (saved.customFonts) merged.customFonts = saved.customFonts;
+                // Load background image settings
+                if (saved.readerBgImage !== undefined) merged.readerBgImage = saved.readerBgImage;
+                if (saved.readerBgOpacity !== undefined) merged.readerBgOpacity = saved.readerBgOpacity;
+
+                // Re-register custom fonts with FontFace API
+                if (merged.customFonts?.length) {
+                    for (const cf of merged.customFonts) {
+                        try {
+                            const face = new FontFace(cf.family, `url(${cf.dataUrl})`);
+                            await face.load();
+                            document.fonts.add(face);
+                        } catch (e) {
+                            console.warn('Failed to load custom font:', cf.name, e);
+                        }
+                    }
+                }
+
                 setSettings(merged);
             } catch (e) {
                 console.warn('Failed to load settings:', e);

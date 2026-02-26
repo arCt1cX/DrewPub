@@ -7,22 +7,20 @@ let dbPromise;
 
 function getDB() {
     if (!dbPromise) {
-        dbPromise = openDB(DB_NAME, 2, { // Increment DB version to 2
-            upgrade(db, oldVersion, newVersion, transaction) {
-                if (oldVersion < 1) {
+        dbPromise = openDB(DB_NAME, DB_VERSION, {
+            upgrade(db) {
+                if (!db.objectStoreNames.contains('books')) {
                     const bookStore = db.createObjectStore('books', { keyPath: 'id' });
                     bookStore.createIndex('title', 'title');
                     bookStore.createIndex('author', 'author');
                     bookStore.createIndex('addedAt', 'addedAt');
                     bookStore.createIndex('lastReadAt', 'lastReadAt');
-
-                    db.createObjectStore('positions', { keyPath: 'bookId' });
-                    db.createObjectStore('settings', { keyPath: 'key' });
                 }
-                if (oldVersion < 2) {
-                    if (!db.objectStoreNames.contains('assets')) {
-                        db.createObjectStore('assets', { keyPath: 'id' });
-                    }
+                if (!db.objectStoreNames.contains('positions')) {
+                    db.createObjectStore('positions', { keyPath: 'bookId' });
+                }
+                if (!db.objectStoreNames.contains('settings')) {
+                    db.createObjectStore('settings', { keyPath: 'key' });
                 }
             }
         });
@@ -100,22 +98,4 @@ export async function getAllSettings() {
         map[s.key] = s.value;
     }
     return map;
-}
-
-// ─── Custom Assets (Fonts, Backgrounds) ─────────────
-
-export async function saveCustomAsset(id, blob) {
-    const db = await getDB();
-    return db.put('assets', { id, blob, updatedAt: Date.now() });
-}
-
-export async function getCustomAsset(id) {
-    const db = await getDB();
-    const result = await db.get('assets', id);
-    return result?.blob;
-}
-
-export async function deleteCustomAsset(id) {
-    const db = await getDB();
-    return db.delete('assets', id);
 }

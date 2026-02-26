@@ -1,17 +1,73 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import { useSettings } from '../contexts/SettingsContext';
 import { FONTS, THEMES, getTheme } from '../styles/themes';
 import './SettingsPanel.css';
 
 export default function SettingsPanel({ onClose }) {
     const { settings, updateSetting, updateMultipleSettings } = useSettings();
+    const fontInputRef = useRef(null);
+    const bgInputRef = useRef(null);
 
-    const currentFont = FONTS.find(f => f.id === settings.font) || FONTS[0];
+    // All fonts: built-in + custom
+    const allFonts = [...FONTS, ...(settings.customFonts || [])];
+    const currentFont = allFonts.find(f => f.id === settings.font) || FONTS[0];
 
     const handleCustomThemeChange = (field, value) => {
         const current = settings.customTheme || { ...THEMES.dark, id: 'custom', name: 'Custom' };
         const updated = { ...current, [field]: value };
         updateMultipleSettings({ theme: 'custom', customTheme: updated });
+    };
+
+    // ── Custom Font Upload ────────────────────────────────
+    const handleFontUpload = async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        const name = file.name.replace(/\.(ttf|otf|woff|woff2)$/i, '');
+        const familyName = `CustomFont-${name}`;
+        const id = `custom-${Date.now()}`;
+
+        try {
+            const reader = new FileReader();
+            reader.onload = async () => {
+                const dataUrl = reader.result;
+                // Register with FontFace API
+                const face = new FontFace(familyName, `url(${dataUrl})`);
+                await face.load();
+                document.fonts.add(face);
+
+                const newFont = { id, name, family: familyName, dataUrl };
+                const updatedFonts = [...(settings.customFonts || []), newFont];
+                await updateSetting('customFonts', updatedFonts);
+                await updateSetting('font', id);
+            };
+            reader.readAsDataURL(file);
+        } catch (err) {
+            console.error('Failed to load font:', err);
+        }
+
+        // Clear input so same file can be re-selected
+        e.target.value = '';
+    };
+
+    const handleRemoveCustomFont = async (fontId) => {
+        const updatedFonts = (settings.customFonts || []).filter(f => f.id !== fontId);
+        await updateSetting('customFonts', updatedFonts);
+        if (settings.font === fontId) {
+            await updateSetting('font', 'literata');
+        }
+    };
+
+    // ── Background Image Upload ───────────────────────────
+    const handleBgUpload = (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+            updateSetting('readerBgImage', reader.result);
+        };
+        reader.readAsDataURL(file);
+        e.target.value = '';
     };
 
     return (
@@ -47,50 +103,40 @@ export default function SettingsPanel({ onClose }) {
                     <section className="settings-section">
                         <h3 className="section-label">Font</h3>
                         <div className="font-grid">
-                            {FONTS.map(font => (
-                                <button
-                                    key={font.id}
-                                    className={`font-btn ${settings.font === font.id ? 'active' : ''}`}
-                                    style={{ fontFamily: font.family }}
-                                    onClick={() => updateSetting('font', font.id)}
-                                >
-                                    {font.name}
-                                </button>
+                            {allFonts.map(font => (
+                                <div key={font.id} className="font-btn-wrapper">
+                                    <button
+                                        className={`font-btn ${settings.font === font.id ? 'active' : ''}`}
+                                        style={{ fontFamily: font.family }}
+                                        onClick={() => updateSetting('font', font.id)}
+                                    >
+                                        {font.name}
+                                    </button>
+                                    {font.id.startsWith('custom-') && (
+                                        <button
+                                            className="font-delete-btn"
+                                            onClick={(e) => { e.stopPropagation(); handleRemoveCustomFont(font.id); }}
+                                            title="Remove font"
+                                        >
+                                            ✕
+                                        </button>
+                                    )}
+                                </div>
                             ))}
-                            <label className={`font-btn custom-upload ${settings.font === 'custom' ? 'active' : ''}`}>
-                                <input
-                                    type="file"
-                                    accept=".ttf,.otf,.woff,.woff2"
-                                    style={{ display: 'none' }}
-                                    onChange={async (e) => {
-                                        const file = e.target.files[0];
-                                        if (!file) return;
-                                        try {
-                                            const { saveCustomAsset } = await import('../db');
-                                            const fontId = 'custom_font_' + Date.now();
-                                            await saveCustomAsset(fontId, file);
-                                            updateMultipleSettings({
-                                                font: 'custom',
-                                                customFontId: fontId,
-                                                customFontName: file.name
-                                            });
-                                        } catch (err) {
-                                            console.error("Failed to save custom font:", err);
-                                            alert("Failed to load font. Please try another file.");
-                                        }
-                                    }}
-                                />
-                                {settings.font === 'custom' && settings.customFontName ? (
-                                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                                        <span style={{ fontSize: '10px', opacity: 0.7 }}>Custom</span>
-                                        <span style={{ fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}>
-                                            {settings.customFontName.replace(/\.[^/.]+$/, "")}
-                                        </span>
-                                    </div>
-                                ) : (
-                                    <span>+ Upload Font</span>
-                                )}
-                            </label>
+                            {/* Upload font button */}
+                            <button
+                                className="font-btn font-upload-btn"
+                                onClick={() => fontInputRef.current?.click()}
+                            >
+                                + Font
+                            </button>
+                            <input
+                                ref={fontInputRef}
+                                type="file"
+                                accept=".ttf,.otf,.woff,.woff2"
+                                style={{ display: 'none' }}
+                                onChange={handleFontUpload}
+                            />
                         </div>
                     </section>
 
@@ -183,6 +229,61 @@ export default function SettingsPanel({ onClose }) {
                         </div>
                     </section>
 
+                    {/* ─── Background Image ───────────────── */}
+                    <section className="settings-section">
+                        <h3 className="section-label">Background Image</h3>
+                        <div className="bg-image-controls">
+                            {settings.readerBgImage ? (
+                                <div className="bg-preview-row">
+                                    <div
+                                        className="bg-preview-thumb"
+                                        style={{ backgroundImage: `url(${settings.readerBgImage})` }}
+                                    />
+                                    <button
+                                        className="toggle-btn"
+                                        onClick={() => bgInputRef.current?.click()}
+                                    >
+                                        Change
+                                    </button>
+                                    <button
+                                        className="toggle-btn"
+                                        onClick={() => updateSetting('readerBgImage', null)}
+                                    >
+                                        ✕ Remove
+                                    </button>
+                                </div>
+                            ) : (
+                                <button
+                                    className="toggle-btn"
+                                    onClick={() => bgInputRef.current?.click()}
+                                >
+                                    🖼️ Choose Image
+                                </button>
+                            )}
+                            <input
+                                ref={bgInputRef}
+                                type="file"
+                                accept="image/*"
+                                style={{ display: 'none' }}
+                                onChange={handleBgUpload}
+                            />
+                            {settings.readerBgImage && (
+                                <div className="slider-row">
+                                    <span className="slider-label">Opacity</span>
+                                    <input
+                                        type="range"
+                                        min="0.02"
+                                        max="0.3"
+                                        step="0.01"
+                                        value={settings.readerBgOpacity}
+                                        onChange={e => updateSetting('readerBgOpacity', Number(e.target.value))}
+                                    />
+                                    <span className="slider-value">{Math.round(settings.readerBgOpacity * 100)}%</span>
+                                </div>
+                            )}
+                        </div>
+                    </section>
+
                     {/* ─── Themes ──────────────────────────── */}
                     <section className="settings-section">
                         <h3 className="section-label">Theme</h3>
@@ -226,62 +327,6 @@ export default function SettingsPanel({ onClose }) {
                                 </div>
                                 <span className="theme-name">Custom</span>
                             </button>
-                        </div>
-
-                        {/* Custom Background Uploader */}
-                        <div style={{ marginTop: '16px' }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                                <span className="section-label" style={{ margin: 0 }}>Custom Background</span>
-                                {settings.customBackgroundId && (
-                                    <button
-                                        className="btn-icon"
-                                        style={{ fontSize: '12px', padding: '4px' }}
-                                        onClick={async () => {
-                                            const { deleteCustomAsset } = await import('../db');
-                                            await deleteCustomAsset(settings.customBackgroundId);
-                                            updateSetting('customBackgroundId', null);
-                                        }}
-                                    >
-                                        🗑️ Clear
-                                    </button>
-                                )}
-                            </div>
-                            <label className="btn-primary" style={{ display: 'block', textAlign: 'center', padding: '10px', fontSize: '14px', cursor: 'pointer', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)' }}>
-                                <input
-                                    type="file"
-                                    accept="image/*"
-                                    style={{ display: 'none' }}
-                                    onChange={async (e) => {
-                                        const file = e.target.files[0];
-                                        if (!file) return;
-                                        try {
-                                            const { saveCustomAsset } = await import('../db');
-                                            const bgId = 'custom_bg_' + Date.now();
-                                            await saveCustomAsset(bgId, file);
-                                            updateSetting('customBackgroundId', bgId);
-                                        } catch (err) {
-                                            console.error("Failed to save custom background:", err);
-                                            alert("Failed to load image. Please try another file.");
-                                        }
-                                    }}
-                                />
-                                {settings.customBackgroundId ? 'Change Image...' : '+ Upload Background Image'}
-                            </label>
-
-                            {settings.customBackgroundId && (
-                                <div className="slider-row" style={{ marginTop: '16px' }}>
-                                    <span className="slider-label">Theme Overlay</span>
-                                    <input
-                                        type="range"
-                                        min="0"
-                                        max="1"
-                                        step="0.05"
-                                        value={settings.backgroundOverlayOpacity}
-                                        onChange={e => updateSetting('backgroundOverlayOpacity', Number(e.target.value))}
-                                    />
-                                    <span className="slider-value">{Math.round(settings.backgroundOverlayOpacity * 100)}%</span>
-                                </div>
-                            )}
                         </div>
                     </section>
 
@@ -343,9 +388,24 @@ export default function SettingsPanel({ onClose }) {
                                 background: getTheme(settings.theme, settings.customTheme).readerBg,
                                 color: getTheme(settings.theme, settings.customTheme).readerText,
                                 padding: Math.min(settings.margins, 24) + 'px',
+                                position: 'relative',
+                                overflow: 'hidden',
                             }}
                         >
-                            The quick brown fox jumps over the lazy dog. Typography is the art and technique of arranging type to make written language legible, readable, and appealing.
+                            {settings.readerBgImage && (
+                                <div style={{
+                                    position: 'absolute',
+                                    inset: 0,
+                                    backgroundImage: `url(${settings.readerBgImage})`,
+                                    backgroundSize: 'cover',
+                                    backgroundPosition: 'center',
+                                    opacity: settings.readerBgOpacity,
+                                    pointerEvents: 'none',
+                                }} />
+                            )}
+                            <span style={{ position: 'relative', zIndex: 1 }}>
+                                The quick brown fox jumps over the lazy dog. Typography is the art and technique of arranging type to make written language legible, readable, and appealing.
+                            </span>
                         </div>
                     </section>
                 </div>

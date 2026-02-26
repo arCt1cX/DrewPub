@@ -89,10 +89,7 @@ export const DEFAULT_SETTINGS = {
     theme: 'dark',
     customTheme: null,
     font: 'literata',
-    customFontId: null,
-    customFontName: null,
-    customBackgroundId: null,
-    backgroundOverlayOpacity: 0.8,
+    customFonts: [], // [{ id, name, family, dataUrl }]
     fontSize: 18,
     lineHeight: 1.7,
     paragraphSpacing: 16,
@@ -100,6 +97,8 @@ export const DEFAULT_SETTINGS = {
     maxWidth: 720,
     textAlign: 'left',
     readingMode: 'paginated', // 'paginated' | 'scroll'
+    readerBgImage: null, // base64 data-url
+    readerBgOpacity: 0.08, // 0.02–0.3
     libraryView: 'grid', // 'grid' | 'list'
     librarySortBy: 'lastReadAt', // 'title' | 'author' | 'lastReadAt'
     librarySortOrder: 'desc',

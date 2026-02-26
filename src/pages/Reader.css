@@ -10,6 +10,15 @@
     transition: background-color var(--transition-normal);
 }
 
+.reader-bg-image {
+    position: absolute;
+    inset: 0;
+    background-size: cover;
+    background-position: center;
+    pointer-events: none;
+    z-index: 0;
+}
+
 .reader-viewer {
     flex: 1;
     overflow: hidden;
