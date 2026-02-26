@@ -5,53 +5,39 @@
     inset: 0;
     display: flex;
     flex-direction: column;
+    background: var(--reader-bg);
     z-index: 60;
     transition: background-color var(--transition-normal);
 }
 
-.reader-viewer-container {
+.reader-viewer {
     flex: 1;
-    width: 100%;
-    position: relative;
     overflow: hidden;
-    /* This centers the entire EPUB rendition */
-    margin: 0 auto;
-    background: transparent;
+    position: relative;
+    cursor: default;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
 }
 
-.reader-viewer-container.scroll {
+.reader-viewer.reader-scroll {
     overflow-y: auto;
     touch-action: pan-y;
 }
 
-.reader-viewer-container.paginated {
+.reader-viewer.reader-paginated {
     touch-action: none;
 }
 
-/* Page navigation edges */
-.edge-nav {
-    position: fixed;
-    top: 60px;
-    bottom: 80px;
-    width: 20%;
-    z-index: 70;
-    cursor: pointer;
-    background: transparent;
+/* Force single-column for epub.js paginated */
+.reader-viewer.reader-paginated .epub-container {
+    column-count: 1 !important;
+    columns: auto !important;
 }
 
-.edge-nav.left {
-    left: 0;
-}
-
-.edge-nav.right {
-    right: 0;
-}
-
-/* epub.js internal iframe */
-.reader-viewer-container iframe {
+/* epub.js container styling */
+.reader-viewer iframe {
     border: none !important;
-    display: block;
-    margin: 0 auto;
 }
 
 /* ─── Reader Loading ─────────────────────────────────── */
@@ -65,21 +51,5 @@
     justify-content: center;
     gap: 16px;
     color: var(--text-secondary);
-    background: inherit;
-    z-index: 100;
-}
-
-.spinner {
-    width: 40px;
-    height: 40px;
-    border: 3px solid rgba(255, 255, 255, 0.1);
-    border-top-color: var(--accent);
-    border-radius: 50%;
-    animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-    to {
-        transform: rotate(360deg);
-    }
+    z-index: 10;
 }
