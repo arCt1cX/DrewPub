@@ -336,10 +336,16 @@ export default function Reader() {
                 lastY: t.clientY,
                 time: Date.now(),
                 moved: false,
+                pullOffset: 0,
             };
             momentumRef.current.lastY = t.clientY;
             momentumRef.current.lastTime = Date.now();
             momentumRef.current.velocity = 0;
+
+            // Remove transition during drag for responsiveness
+            if (viewerRef.current) {
+                viewerRef.current.style.transition = 'none';
+            }
         }
     }, [stopMomentum]);
 
@@ -361,17 +367,30 @@ export default function Reader() {
 
         // Calculate instantaneous velocity for momentum
         if (dt > 0) {
-            momentumRef.current.velocity = (t.clientY - momentumRef.current.lastY) / (dt / 16); // normalize to roughly 60fps
+            momentumRef.current.velocity = (t.clientY - momentumRef.current.lastY) / (dt / 16);
             momentumRef.current.lastY = t.clientY;
             momentumRef.current.lastTime = now;
         }
 
-        // In scroll mode: scroll the epub container
+        // In scroll mode: scroll the epub container or apply resistance pull
         if (settingsRef.current.readingMode === 'scroll' && overlayTouchRef.current.moved) {
             e.preventDefault();
             const container = getScrollContainer();
             if (container) {
-                container.scrollTop -= dy;
+                const atTop = container.scrollTop <= 0;
+                const atBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 1;
+
+                if ((atTop && dy > 0) || (atBottom && dy < 0) || overlayTouchRef.current.pullOffset !== 0) {
+                    // Apply resistance pull
+                    const resistance = 0.4;
+                    overlayTouchRef.current.pullOffset += dy * resistance;
+
+                    // Cap the pull offset visually
+                    const displayOffset = Math.max(-120, Math.min(120, overlayTouchRef.current.pullOffset));
+                    viewerRef.current.style.transform = `translateY(${displayOffset}px)`;
+                } else {
+                    container.scrollTop -= dy;
+                }
             }
         }
     }, [getScrollContainer]);
@@ -383,7 +402,25 @@ export default function Reader() {
         const dy = Math.abs(t.clientY - overlayTouchRef.current.startY);
         const dt = Date.now() - overlayTouchRef.current.time;
         const wasMoved = overlayTouchRef.current.moved;
+        const finalPull = overlayTouchRef.current.pullOffset;
         overlayTouchRef.current = null;
+
+        // Reset transform with animation
+        if (viewerRef.current) {
+            viewerRef.current.style.transition = 'transform 0.3s cubic-bezier(0.2, 0, 0, 1)';
+            viewerRef.current.style.transform = 'translateY(0)';
+        }
+
+        // Check if pull met threshold for chapter change
+        const threshold = 60;
+        if (Math.abs(finalPull) > threshold) {
+            if (finalPull > 0) {
+                renditionRef.current?.prev();
+            } else {
+                renditionRef.current?.next();
+            }
+            return;
+        }
 
         // If it was a scroll gesture, start momentum
         if (wasMoved || dx > 20 || dy > 20 || dt > 400) {
