@@ -369,6 +369,9 @@ export default function Reader() {
 
         rendition.themes.default({
             'body': bodyStyles,
+            'p, span, div, li, td': {
+                'color': theme.readerText + ' !important',
+            },
             'p': {
                 'margin-bottom': s.paragraphSpacing + 'px !important',
                 'font-family': 'inherit !important',
@@ -398,6 +401,69 @@ export default function Reader() {
     // ── Overlay touch/click handlers (BOTH modes) ─────────
     const overlayTouchRef = useRef(null);
     const momentumRef = useRef({ velocity: 0, lastTime: 0, lastY: 0, animationFrame: null });
+    const longPressTimerRef = useRef(null);
+
+    // ── Document Word Selection (through overlay) ─────────
+    const getWordAtPoint = useCallback((clientX, clientY) => {
+        try {
+            const iframe = viewerRef.current?.querySelector('iframe');
+            if (!iframe) return null;
+            const iframeRect = iframe.getBoundingClientRect();
+            const x = clientX - iframeRect.left;
+            const y = clientY - iframeRect.top;
+
+            const doc = iframe.contentDocument || iframe.contentWindow?.document;
+            if (!doc) return null;
+
+            let range, textNode, offset;
+            if (doc.caretRangeFromPoint) {
+                range = doc.caretRangeFromPoint(x, y);
+                if (range) {
+                    textNode = range.startContainer;
+                    offset = range.startOffset;
+                }
+            } else if (doc.caretPositionFromPoint) {
+                const pos = doc.caretPositionFromPoint(x, y);
+                if (pos) {
+                    textNode = pos.offsetNode;
+                    offset = pos.offset;
+                }
+            }
+
+            if (textNode && textNode.nodeType === 3) {
+                const text = textNode.nodeValue;
+                let start = offset;
+                let end = offset;
+                // Match word characters + common accented characters
+                const isWordChar = (c) => /[\w\u00C0-\u024F\u1E00-\u1EFF\']/.test(c);
+
+                while (start > 0 && isWordChar(text[start - 1])) start--;
+                while (end < text.length && isWordChar(text[end])) end++;
+
+                const word = text.slice(start, end).trim();
+                // Reject if empty or too long
+                if (word.length > 0 && word.length < 50) {
+                    const wordRange = doc.createRange();
+                    wordRange.setStart(textNode, start);
+                    wordRange.setEnd(textNode, end);
+                    // Clear and apply strict selection to document
+                    const sel = doc.getSelection();
+                    sel?.removeAllRanges();
+                    sel?.addRange(wordRange);
+
+                    const rect = wordRange.getBoundingClientRect();
+                    return {
+                        word,
+                        x: rect.left + iframeRect.left + (rect.width / 2),
+                        y: rect.top + iframeRect.top
+                    };
+                }
+            }
+        } catch (err) {
+            console.error("Word selection failed:", err);
+        }
+        return null;
+    }, []);
 
     // Helper: find the scrollable epub container for scroll mode
     const getScrollContainer = useCallback(() => {
@@ -436,6 +502,8 @@ export default function Reader() {
 
     const handleOverlayTouchStart = useCallback((e) => {
         stopMomentum();
+        if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+
         if (e.touches.length === 1) {
             const t = e.touches[0];
             overlayTouchRef.current = {
@@ -454,8 +522,20 @@ export default function Reader() {
             if (viewerRef.current) {
                 viewerRef.current.style.transition = 'none';
             }
+
+            // Start long press timer for dictionary (500ms)
+            longPressTimerRef.current = setTimeout(() => {
+                if (!overlayTouchRef.current?.moved) {
+                    if (navigator.vibrate) navigator.vibrate(50);
+                    const result = getWordAtPoint(t.clientX, t.clientY);
+                    if (result) {
+                        setTranslationText(result.word);
+                        setTranslationPos({ x: result.x, y: result.y });
+                    }
+                }
+            }, 500);
         }
-    }, [stopMomentum]);
+    }, [stopMomentum, getWordAtPoint]);
 
     const handleOverlayTouchMove = useCallback((e) => {
         if (!overlayTouchRef.current) return;
@@ -471,6 +551,7 @@ export default function Reader() {
 
         if (totalDx > 10 || totalDy > 10) {
             overlayTouchRef.current.moved = true;
+            if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
         }
 
         // Calculate instantaneous velocity for momentum
@@ -504,6 +585,7 @@ export default function Reader() {
     }, [getScrollContainer]);
 
     const handleOverlayTouchEnd = useCallback((e) => {
+        if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
         if (!overlayTouchRef.current) return;
         const t = e.changedTouches[0];
         const dx = Math.abs(t.clientX - overlayTouchRef.current.startX);
@@ -592,6 +674,14 @@ export default function Reader() {
         }
     }, [toggleControls]);
 
+    const handleOverlayDoubleClick = useCallback((e) => {
+        const result = getWordAtPoint(e.clientX, e.clientY);
+        if (result) {
+            setTranslationText(result.word);
+            setTranslationPos({ x: result.x, y: result.y });
+        }
+    }, [getWordAtPoint]);
+
     return (
         <div className="reader-page">
             {loading ? (
@@ -627,9 +717,13 @@ export default function Reader() {
                 <div
                     className="reader-touch-overlay"
                     onClick={handleOverlayClick}
+                    onDoubleClick={handleOverlayDoubleClick}
                     onTouchStart={handleOverlayTouchStart}
                     onTouchMove={handleOverlayTouchMove}
                     onTouchEnd={handleOverlayTouchEnd}
+                    onContextMenu={(e) => {
+                        e.preventDefault(); // Prevents iOS Safari showing a default popup/select all on this overlay
+                    }}
                 />
             )}
 
