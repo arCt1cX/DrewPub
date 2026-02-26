@@ -140,14 +140,11 @@ export default function Reader() {
                     }
                 }
 
-                // Disable iOS Safari native long-press behavior inside iframe
+                // Disable iOS Safari callout on links etc. inside iframe
+                // NOTE: Do NOT set user-select:none here — it breaks caretRangeFromPoint on iOS
                 const style = doc.createElement('style');
                 style.textContent = `
-                    * {
-                        -webkit-touch-callout: none !important;
-                        -webkit-user-select: none !important;
-                        user-select: none !important;
-                    }
+                    * { -webkit-touch-callout: none !important; }
                 `;
                 doc.head.appendChild(style);
 
