@@ -37,6 +37,8 @@ export default function Reader() {
     const showTocRef = useRef(false);
     const settingsRef = useRef(settings);
 
+    const touchStartRef = useRef(null);
+
     // Keep refs in sync
     useEffect(() => { showControlsRef.current = showControls; }, [showControls]);
     useEffect(() => { showSettingsRef.current = showSettings; }, [showSettings]);
@@ -84,18 +86,15 @@ export default function Reader() {
         }
 
         // Paginated mode: use tap zones
-        // epubjs click event gives clientX relative to the iframe's viewport
-        // We use the outer viewer div width for zone calculation
         const viewerEl = viewerRef.current;
         if (!viewerEl) return;
         const width = viewerEl.clientWidth;
-        // e.clientX from epubjs is the x position within the iframe
         const x = e.clientX;
         const zone = x / width;
 
-        if (zone < 0.25) {
+        if (zone < 0.20) {
             renditionRef.current?.prev();
-        } else if (zone > 0.75) {
+        } else if (zone > 0.80) {
             renditionRef.current?.next();
         } else {
             // Center tap → toggle controls
@@ -106,6 +105,37 @@ export default function Reader() {
             }
         }
     }, [scheduleHideControls, showControlsTemporarily]);
+
+    // ── Handle touch from inside iframe (iPad fix) ────────
+    const handleRenditionTouchStart = useCallback((e) => {
+        if (!e.touches?.length) return;
+        touchStartRef.current = {
+            x: e.touches[0].clientX,
+            y: e.touches[0].clientY,
+            time: Date.now()
+        };
+    }, []);
+
+    const handleRenditionTouchEnd = useCallback((e) => {
+        if (!touchStartRef.current || !e.changedTouches?.length) return;
+
+        const touchEnd = {
+            x: e.changedTouches[0].clientX,
+            y: e.changedTouches[0].clientY,
+            time: Date.now()
+        };
+
+        const dx = touchEnd.x - touchStartRef.current.x;
+        const dy = touchEnd.y - touchStartRef.current.y;
+        const dt = touchEnd.time - touchStartRef.current.time;
+
+        // Detect tap (minimal movement, short duration)
+        if (Math.abs(dx) < 15 && Math.abs(dy) < 15 && dt < 400) {
+            handleRenditionClick(touchEnd);
+        }
+
+        touchStartRef.current = null;
+    }, [handleRenditionClick]);
 
     // ── Handle click on outer wrapper (outside iframe) ────
     const handleOuterClick = useCallback((e) => {
@@ -134,9 +164,9 @@ export default function Reader() {
         const x = e.clientX - rect.left;
         const zone = x / rect.width;
 
-        if (zone < 0.25) {
+        if (zone < 0.20) {
             renditionRef.current?.prev();
-        } else if (zone > 0.75) {
+        } else if (zone > 0.80) {
             renditionRef.current?.next();
         } else {
             if (showControlsRef.current) {
@@ -159,9 +189,10 @@ export default function Reader() {
     // ── Attach epubjs events to rendition ─────────────────
     const attachRenditionEvents = useCallback((rendition) => {
         rendition.on('keyup', handleKeyPress);
-        // 'click' event from epubjs fires when user taps/clicks inside the iframe content
         rendition.on('click', handleRenditionClick);
-    }, [handleRenditionClick]);
+        rendition.on('touchstart', handleRenditionTouchStart);
+        rendition.on('touchend', handleRenditionTouchEnd);
+    }, [handleRenditionClick, handleRenditionTouchStart, handleRenditionTouchEnd]);
 
     // ── Common relocated handler ──────────────────────────
     const makeRelocatedHandler = useCallback((book, destroyed_getter) => (location) => {
@@ -306,9 +337,11 @@ export default function Reader() {
                 'color': theme.readerText + ' !important',
                 'background': theme.readerBg + ' !important',
                 'text-align': settings.textAlign + ' !important',
-                'padding': settings.margins + 'px !important',
+                'padding': `0 ${settings.margins}px !important`,
                 'max-width': settings.maxWidth + 'px !important',
                 'margin': '0 auto !important',
+                'column-gap': '0 !important',
+                'width': 'auto !important'
             },
             'p': {
                 'margin-bottom': settings.paragraphSpacing + 'px !important',
