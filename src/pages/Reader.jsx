@@ -31,20 +31,160 @@ export default function Reader() {
     const [currentPage, setCurrentPage] = useState(0);
 
     const controlsTimerRef = useRef(null);
+    // Refs for values needed inside epubjs event handlers (avoid stale closures)
+    const showControlsRef = useRef(true);
+    const showSettingsRef = useRef(false);
+    const showTocRef = useRef(false);
+    const settingsRef = useRef(settings);
 
-    // Auto-hide controls
+    // Keep refs in sync
+    useEffect(() => { showControlsRef.current = showControls; }, [showControls]);
+    useEffect(() => { showSettingsRef.current = showSettings; }, [showSettings]);
+    useEffect(() => { showTocRef.current = showToc; }, [showToc]);
+    useEffect(() => { settingsRef.current = settings; }, [settings]);
+
+    // ── Auto-hide controls ────────────────────────────────
     const scheduleHideControls = useCallback(() => {
         if (controlsTimerRef.current) clearTimeout(controlsTimerRef.current);
         controlsTimerRef.current = setTimeout(() => {
-            if (!showSettings && !showToc) {
+            if (!showSettingsRef.current && !showTocRef.current) {
                 setShowControls(false);
             }
         }, 3500);
-    }, [showSettings, showToc]);
+    }, []);
 
-    // Initialize book
+    // ── Show controls + schedule hide ─────────────────────
+    const showControlsTemporarily = useCallback(() => {
+        setShowControls(true);
+        scheduleHideControls();
+    }, [scheduleHideControls]);
+
+    // ── Handle tap/click from inside iframe ───────────────
+    // Called by epubjs rendition 'click' event (works inside iframe)
+    const handleRenditionClick = useCallback((e) => {
+        const isPaginated = settingsRef.current.readingMode !== 'scroll';
+
+        // If any panel open → close it on any tap
+        if (showSettingsRef.current || showTocRef.current) {
+            setShowSettings(false);
+            setShowToc(false);
+            setShowControls(true);
+            scheduleHideControls();
+            return;
+        }
+
+        if (!isPaginated) {
+            // Scroll mode: any tap just toggles controls
+            if (showControlsRef.current) {
+                setShowControls(false);
+            } else {
+                showControlsTemporarily();
+            }
+            return;
+        }
+
+        // Paginated mode: use tap zones
+        // epubjs click event gives clientX relative to the iframe's viewport
+        // We use the outer viewer div width for zone calculation
+        const viewerEl = viewerRef.current;
+        if (!viewerEl) return;
+        const width = viewerEl.clientWidth;
+        // e.clientX from epubjs is the x position within the iframe
+        const x = e.clientX;
+        const zone = x / width;
+
+        if (zone < 0.25) {
+            renditionRef.current?.prev();
+        } else if (zone > 0.75) {
+            renditionRef.current?.next();
+        } else {
+            // Center tap → toggle controls
+            if (showControlsRef.current) {
+                setShowControls(false);
+            } else {
+                showControlsTemporarily();
+            }
+        }
+    }, [scheduleHideControls, showControlsTemporarily]);
+
+    // ── Handle click on outer wrapper (outside iframe) ────
+    const handleOuterClick = useCallback((e) => {
+        // The iframe itself swallows clicks; this catches clicks on the wrapper margins
+        if (showSettingsRef.current || showTocRef.current) {
+            setShowSettings(false);
+            setShowToc(false);
+            setShowControls(true);
+            scheduleHideControls();
+            return;
+        }
+
+        const isPaginated = settingsRef.current.readingMode !== 'scroll';
+        if (!isPaginated) {
+            if (showControlsRef.current) {
+                setShowControls(false);
+            } else {
+                showControlsTemporarily();
+            }
+            return;
+        }
+
+        const viewerEl = viewerRef.current;
+        if (!viewerEl) return;
+        const rect = viewerEl.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const zone = x / rect.width;
+
+        if (zone < 0.25) {
+            renditionRef.current?.prev();
+        } else if (zone > 0.75) {
+            renditionRef.current?.next();
+        } else {
+            if (showControlsRef.current) {
+                setShowControls(false);
+            } else {
+                showControlsTemporarily();
+            }
+        }
+    }, [scheduleHideControls, showControlsTemporarily]);
+
+    // ── Keyboard navigation ───────────────────────────────
+    function handleKeyPress(e) {
+        if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+            renditionRef.current?.next();
+        } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+            renditionRef.current?.prev();
+        }
+    }
+
+    // ── Attach epubjs events to rendition ─────────────────
+    const attachRenditionEvents = useCallback((rendition) => {
+        rendition.on('keyup', handleKeyPress);
+        // 'click' event from epubjs fires when user taps/clicks inside the iframe content
+        rendition.on('click', handleRenditionClick);
+    }, [handleRenditionClick]);
+
+    // ── Common relocated handler ──────────────────────────
+    const makeRelocatedHandler = useCallback((book, destroyed_getter) => (location) => {
+        if (destroyed_getter()) return;
+        const cfi = location.start.cfi;
+        setCurrentCfi(cfi);
+        const pct = book.locations.percentageFromCfi(cfi);
+        const progressPct = Math.round(pct * 100);
+        setProgress(progressPct);
+        setCurrentPage(book.locations.locationFromCfi(cfi) || 0);
+        savePosition(bookId, cfi, progressPct);
+        updateBookMeta(bookId, { progress: progressPct, lastReadAt: Date.now() });
+        const chapter = book.navigation?.toc?.find(item => {
+            const href = item.href.split('#')[0];
+            return location.start.href?.includes(href);
+        });
+        if (chapter) setChapterTitle(chapter.label?.trim() || '');
+    }, [bookId]);
+
+    // ── Initialize book ───────────────────────────────────
     useEffect(() => {
         let destroyed = false;
+        const destroyed_getter = () => destroyed;
 
         (async () => {
             try {
@@ -67,14 +207,11 @@ export default function Reader() {
                 });
                 renditionRef.current = rendition;
 
-                // Apply reading styles
                 applyStyles(rendition, settings);
 
-                // Load TOC
                 const navigation = await book.loaded.navigation;
                 setToc(navigation.toc || []);
 
-                // Restore position
                 const savedPos = await getPosition(bookId);
                 if (savedPos?.cfi) {
                     await rendition.display(savedPos.cfi);
@@ -82,39 +219,14 @@ export default function Reader() {
                     await rendition.display();
                 }
 
-                // Generate locations for progress tracking
                 await book.locations.generate(1024);
                 setTotalPages(book.locations.length());
 
-                // Event handlers
-                rendition.on('relocated', (location) => {
-                    if (destroyed) return;
-                    const cfi = location.start.cfi;
-                    setCurrentCfi(cfi);
-
-                    // Calculate progress
-                    const pct = book.locations.percentageFromCfi(cfi);
-                    const progressPct = Math.round(pct * 100);
-                    setProgress(progressPct);
-                    setCurrentPage(book.locations.locationFromCfi(cfi) || 0);
-
-                    // Save position
-                    savePosition(bookId, cfi, progressPct);
-                    updateBookMeta(bookId, { progress: progressPct, lastReadAt: Date.now() });
-
-                    // Update chapter title
-                    const chapter = book.navigation?.toc?.find(item => {
-                        const href = item.href.split('#')[0];
-                        return location.start.href?.includes(href);
-                    });
-                    if (chapter) setChapterTitle(chapter.label?.trim() || '');
-                });
-
-                // Swipe / touch
-                rendition.on('keyup', handleKeyPress);
+                rendition.on('relocated', makeRelocatedHandler(book, destroyed_getter));
+                attachRenditionEvents(rendition);
 
                 setLoading(false);
-                scheduleHideControls();
+                showControlsTemporarily();
 
             } catch (e) {
                 console.error('Failed to load book:', e);
@@ -134,7 +246,7 @@ export default function Reader() {
         };
     }, [bookId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    // Reapply styles when settings change
+    // ── Reapply styles on settings change ────────────────
     useEffect(() => {
         if (renditionRef.current) {
             applyStyles(renditionRef.current, settings);
@@ -145,19 +257,17 @@ export default function Reader() {
         settings.textAlign, settings.theme, settings.customTheme
     ]);
 
-    // Handle reading mode change (requires re-rendering)
+    // ── Rebuild rendition on reading mode change ──────────
     useEffect(() => {
         if (!bookRef.current || !viewerRef.current || loading) return;
 
         const book = bookRef.current;
         const currentCfiVal = currentCfi;
+        let localDestroyed = false;
 
-        // Destroy old rendition
         if (renditionRef.current) {
             try { renditionRef.current.destroy(); } catch (_) { }
         }
-
-        // Clear container
         if (viewerRef.current) {
             viewerRef.current.innerHTML = '';
         }
@@ -172,31 +282,16 @@ export default function Reader() {
         renditionRef.current = rendition;
 
         applyStyles(rendition, settings);
-
-        rendition.on('relocated', (location) => {
-            const cfi = location.start.cfi;
-            setCurrentCfi(cfi);
-            const pct = book.locations.percentageFromCfi(cfi);
-            const progressPct = Math.round(pct * 100);
-            setProgress(progressPct);
-            setCurrentPage(book.locations.locationFromCfi(cfi) || 0);
-            savePosition(bookId, cfi, progressPct);
-            updateBookMeta(bookId, { progress: progressPct, lastReadAt: Date.now() });
-
-            const chapter = book.navigation?.toc?.find(item => {
-                const href = item.href.split('#')[0];
-                return location.start.href?.includes(href);
-            });
-            if (chapter) setChapterTitle(chapter.label?.trim() || '');
-        });
-
-        rendition.on('keyup', handleKeyPress);
+        rendition.on('relocated', makeRelocatedHandler(book, () => localDestroyed));
+        attachRenditionEvents(rendition);
 
         if (currentCfiVal) {
             rendition.display(currentCfiVal);
         } else {
             rendition.display();
         }
+
+        return () => { localDestroyed = true; };
     }, [settings.readingMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
     function applyStyles(rendition, settings) {
@@ -235,44 +330,6 @@ export default function Reader() {
         });
     }
 
-    function handleKeyPress(e) {
-        if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
-            renditionRef.current?.next();
-        } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
-            renditionRef.current?.prev();
-        }
-    }
-
-    // Touch navigation zones
-    const handleViewerClick = (e) => {
-        if (showSettings || showToc) {
-            setShowSettings(false);
-            setShowToc(false);
-            return;
-        }
-
-        const rect = viewerRef.current?.getBoundingClientRect();
-        if (!rect) return;
-
-        const x = e.clientX - rect.left;
-        const width = rect.width;
-        const zone = x / width;
-
-        if (zone < 0.25) {
-            // Left zone — previous
-            renditionRef.current?.prev();
-        } else if (zone > 0.75) {
-            // Right zone — next
-            renditionRef.current?.next();
-        } else {
-            // Center — toggle controls
-            setShowControls(prev => !prev);
-            if (!showControls) {
-                scheduleHideControls();
-            }
-        }
-    };
-
     const handleGoToChapter = (href) => {
         renditionRef.current?.display(href);
         setShowToc(false);
@@ -284,6 +341,8 @@ export default function Reader() {
         navigate('/');
     };
 
+    const isPaginated = settings.readingMode !== 'scroll';
+
     return (
         <div className="reader-page">
             {loading ? (
@@ -292,28 +351,42 @@ export default function Reader() {
                     <p>Loading book...</p>
                 </div>
             ) : (
+                <ReaderControls
+                    visible={showControls}
+                    bookTitle={bookMeta?.title}
+                    chapterTitle={chapterTitle}
+                    progress={progress}
+                    currentPage={currentPage}
+                    totalPages={totalPages}
+                    isPaginated={isPaginated}
+                    onBack={handleGoBack}
+                    onToggleToc={() => { setShowToc(!showToc); setShowSettings(false); }}
+                    onToggleSettings={() => { setShowSettings(!showSettings); setShowToc(false); }}
+                    onPrev={() => renditionRef.current?.prev()}
+                    onNext={() => renditionRef.current?.next()}
+                />
+            )}
+
+            {/* Outer viewer wrapper — catches clicks on margins outside iframe */}
+            <div
+                ref={viewerRef}
+                className={`reader-viewer ${isPaginated ? 'reader-paginated' : 'reader-scroll'}`}
+                onClick={handleOuterClick}
+            />
+
+            {/* Invisible tap zones for paginated mode (left/right edges) */}
+            {!loading && isPaginated && (
                 <>
-                    <ReaderControls
-                        visible={showControls}
-                        bookTitle={bookMeta?.title}
-                        chapterTitle={chapterTitle}
-                        progress={progress}
-                        currentPage={currentPage}
-                        totalPages={totalPages}
-                        onBack={handleGoBack}
-                        onToggleToc={() => { setShowToc(!showToc); setShowSettings(false); }}
-                        onToggleSettings={() => { setShowSettings(!showSettings); setShowToc(false); }}
-                        onPrev={() => renditionRef.current?.prev()}
-                        onNext={() => renditionRef.current?.next()}
+                    <div
+                        className="reader-tap-zone reader-tap-left"
+                        onClick={() => renditionRef.current?.prev()}
+                    />
+                    <div
+                        className="reader-tap-zone reader-tap-right"
+                        onClick={() => renditionRef.current?.next()}
                     />
                 </>
             )}
-
-            <div
-                ref={viewerRef}
-                className="reader-viewer"
-                onClick={handleViewerClick}
-            />
 
             {showSettings && (
                 <SettingsPanel onClose={() => setShowSettings(false)} />

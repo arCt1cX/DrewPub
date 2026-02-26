@@ -62,6 +62,15 @@ export default function Header({
                     {viewMode === 'grid' ? '☰' : '⊞'}
                 </button>
 
+                <button
+                    className="btn-icon settings-btn"
+                    onClick={onShowSettings}
+                    title="Settings"
+                    style={{ fontSize: '1.2rem' }}
+                >
+                    ⚙
+                </button>
+
                 <button className="btn btn-primary upload-btn" onClick={onUpload}>
                     <span className="upload-icon">+</span>
                     <span className="upload-text">Add Book</span>

@@ -13,6 +13,7 @@ export default function ReaderControls({
     onToggleSettings,
     onPrev,
     onNext,
+    isPaginated,
 }) {
     return (
         <>

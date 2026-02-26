@@ -14,10 +14,36 @@
     flex: 1;
     overflow: hidden;
     position: relative;
-    touch-action: pan-y;
+    touch-action: none;
     cursor: default;
     -webkit-user-select: none;
     user-select: none;
+}
+
+.reader-viewer.reader-scroll {
+    overflow-y: auto;
+    touch-action: pan-y;
+}
+
+/* Invisible tap zones for paginated navigation */
+.reader-tap-zone {
+    position: fixed;
+    top: 60px;
+    /* Below top bar */
+    bottom: 80px;
+    /* Above bottom bar */
+    width: 25%;
+    z-index: 70;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.reader-tap-left {
+    left: 0;
+}
+
+.reader-tap-right {
+    right: 0;
 }
 
 /* epub.js container styling */

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Header from '../components/Header';
 import BookCard from '../components/BookCard';
+import SettingsPanel from '../components/SettingsPanel';
 import { getAllBooks, addBook } from '../db';
 import { parseEpub, generateId } from '../utils/epub';
 import { useSettings } from '../contexts/SettingsContext';
@@ -12,6 +13,7 @@ export default function Library() {
     const [loading, setLoading] = useState(true);
     const [uploading, setUploading] = useState(false);
     const [dragOver, setDragOver] = useState(false);
+    const [showSettings, setShowSettings] = useState(false);
     const fileInputRef = useRef(null);
 
     const loadBooks = useCallback(async () => {
@@ -113,6 +115,7 @@ export default function Library() {
                 onSortChange={(val) => updateSetting('librarySortBy', val)}
                 bookCount={books.length}
                 onUpload={handleUploadClick}
+                onShowSettings={() => setShowSettings(true)}
             />
 
             <input
@@ -187,6 +190,10 @@ export default function Library() {
                         <p>Drop EPUB files here</p>
                     </div>
                 </div>
+            )}
+
+            {showSettings && (
+                <SettingsPanel onClose={() => setShowSettings(false)} />
             )}
         </div>
     );
