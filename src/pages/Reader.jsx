@@ -289,6 +289,7 @@ export default function Reader() {
 
     // ── Overlay touch/click handlers (BOTH modes) ─────────
     const overlayTouchRef = useRef(null);
+    const momentumRef = useRef({ velocity: 0, lastTime: 0, lastY: 0, animationFrame: null });
 
     // Helper: find the scrollable epub container for scroll mode
     const getScrollContainer = useCallback(() => {
@@ -298,22 +299,57 @@ export default function Reader() {
         return viewer.querySelector('.epub-container') || viewer;
     }, []);
 
+    const stopMomentum = useCallback(() => {
+        if (momentumRef.current.animationFrame) {
+            cancelAnimationFrame(momentumRef.current.animationFrame);
+            momentumRef.current.animationFrame = null;
+        }
+        momentumRef.current.velocity = 0;
+    }, []);
+
+    const startMomentum = useCallback(() => {
+        const container = getScrollContainer();
+        if (!container || Math.abs(momentumRef.current.velocity) < 0.5) return;
+
+        const friction = 0.95; // Decay factor
+        const step = () => {
+            if (Math.abs(momentumRef.current.velocity) < 0.5) {
+                momentumRef.current.animationFrame = null;
+                return;
+            }
+
+            container.scrollTop -= momentumRef.current.velocity;
+            momentumRef.current.velocity *= friction;
+            momentumRef.current.animationFrame = requestAnimationFrame(step);
+        };
+
+        momentumRef.current.animationFrame = requestAnimationFrame(step);
+    }, [getScrollContainer]);
+
     const handleOverlayTouchStart = useCallback((e) => {
+        stopMomentum();
         if (e.touches.length === 1) {
+            const t = e.touches[0];
             overlayTouchRef.current = {
-                startX: e.touches[0].clientX,
-                startY: e.touches[0].clientY,
-                lastY: e.touches[0].clientY,
+                startX: t.clientX,
+                startY: t.clientY,
+                lastY: t.clientY,
                 time: Date.now(),
                 moved: false,
             };
+            momentumRef.current.lastY = t.clientY;
+            momentumRef.current.lastTime = Date.now();
+            momentumRef.current.velocity = 0;
         }
-    }, []);
+    }, [stopMomentum]);
 
     const handleOverlayTouchMove = useCallback((e) => {
         if (!overlayTouchRef.current) return;
         const t = e.touches[0];
+        const now = Date.now();
         const dy = t.clientY - overlayTouchRef.current.lastY;
+        const dt = now - momentumRef.current.lastTime;
+
         overlayTouchRef.current.lastY = t.clientY;
 
         const totalDx = Math.abs(t.clientX - overlayTouchRef.current.startX);
@@ -321,6 +357,13 @@ export default function Reader() {
 
         if (totalDx > 10 || totalDy > 10) {
             overlayTouchRef.current.moved = true;
+        }
+
+        // Calculate instantaneous velocity for momentum
+        if (dt > 0) {
+            momentumRef.current.velocity = (t.clientY - momentumRef.current.lastY) / (dt / 16); // normalize to roughly 60fps
+            momentumRef.current.lastY = t.clientY;
+            momentumRef.current.lastTime = now;
         }
 
         // In scroll mode: scroll the epub container
@@ -342,8 +385,13 @@ export default function Reader() {
         const wasMoved = overlayTouchRef.current.moved;
         overlayTouchRef.current = null;
 
-        // Not a tap — it was a scroll/swipe gesture
-        if (wasMoved || dx > 20 || dy > 20 || dt > 400) return;
+        // If it was a scroll gesture, start momentum
+        if (wasMoved || dx > 20 || dy > 20 || dt > 400) {
+            if (settingsRef.current.readingMode === 'scroll') {
+                startMomentum();
+            }
+            return;
+        }
 
         e.preventDefault();
         e.stopPropagation();
@@ -368,7 +416,7 @@ export default function Reader() {
             // Scroll: any tap toggles controls
             toggleControls();
         }
-    }, [toggleControls]);
+    }, [toggleControls, startMomentum]);
 
     const handleOverlayClick = useCallback((e) => {
         const viewerEl = viewerRef.current;
