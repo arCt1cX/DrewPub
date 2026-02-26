@@ -85,41 +85,20 @@ export default function Reader() {
     const attachRenditionEvents = useCallback((rendition) => {
         rendition.on('keyup', handleKeyPress);
 
-        // For scroll mode: use the forwarded touch/click events from epub.js
-        // to toggle controls when user taps inside the iframe content
-        // (In paginated mode, the overlay handles everything)
-        rendition.on('click', () => {
-            if (settingsRef.current.readingMode === 'scroll') {
-                toggleControls();
-            }
-        });
-
-        // Touch events forwarded from epub.js iframe (for scroll mode on touch devices)
-        let touchStartData = null;
-        rendition.on('touchstart', (e) => {
-            if (settingsRef.current.readingMode !== 'scroll') return;
+        // Clean up &nbsp; entities that show as literal text in some epubs
+        rendition.hooks.content.register((contents) => {
             try {
-                const t = e.touches?.[0];
-                if (t) {
-                    touchStartData = { x: t.clientX, y: t.clientY, time: Date.now() };
+                const doc = contents.document;
+                if (!doc) return;
+                const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, null, false);
+                let node;
+                while ((node = walker.nextNode())) {
+                    // Replace literal .&nbsp; and standalone &nbsp; with proper space
+                    if (node.nodeValue && node.nodeValue.includes('\u00a0')) {
+                        node.nodeValue = node.nodeValue.replace(/\.\u00a0/g, '. ').replace(/\u00a0/g, ' ');
+                    }
                 }
             } catch (_) { /* ignore */ }
-        });
-
-        rendition.on('touchend', (e) => {
-            if (settingsRef.current.readingMode !== 'scroll') return;
-            if (!touchStartData) return;
-            try {
-                const t = e.changedTouches?.[0];
-                if (!t) return;
-                const dx = Math.abs(t.clientX - touchStartData.x);
-                const dy = Math.abs(t.clientY - touchStartData.y);
-                const dt = Date.now() - touchStartData.time;
-                if (dx < 20 && dy < 20 && dt < 400) {
-                    toggleControls();
-                }
-            } catch (_) { /* ignore */ }
-            touchStartData = null;
         });
     }, [toggleControls]);
 
@@ -254,12 +233,8 @@ export default function Reader() {
     function applyStyles(rendition, s) {
         const fontObj = FONTS.find(f => f.id === s.font) || FONTS[0];
         const theme = getTheme(s.theme, s.customTheme);
-        const isPag = s.readingMode !== 'scroll';
 
         rendition.themes.default({
-            'html': {
-                ...(isPag ? { 'column-count': '1 !important', 'columns': 'auto !important' } : {}),
-            },
             'body': {
                 'font-family': fontObj.family + ' !important',
                 'font-size': s.fontSize + 'px !important',
@@ -270,7 +245,6 @@ export default function Reader() {
                 'padding': s.margins + 'px !important',
                 'max-width': s.maxWidth + 'px !important',
                 'margin': '0 auto !important',
-                ...(isPag ? { 'column-count': '1 !important', 'columns': 'auto !important' } : {}),
             },
             'p': {
                 'margin-bottom': s.paragraphSpacing + 'px !important',
@@ -368,9 +342,9 @@ export default function Reader() {
 
         if (isCurrentlyPaginated) {
             // Paginated: zone-based navigation
-            if (zone < 0.3) {
+            if (zone < 0.2) {
                 renditionRef.current?.prev();
-            } else if (zone > 0.7) {
+            } else if (zone > 0.8) {
                 renditionRef.current?.next();
             } else {
                 toggleControls();
@@ -391,9 +365,9 @@ export default function Reader() {
         const isCurrentlyPaginated = settingsRef.current.readingMode !== 'scroll';
 
         if (isCurrentlyPaginated) {
-            if (zone < 0.3) {
+            if (zone < 0.2) {
                 renditionRef.current?.prev();
-            } else if (zone > 0.7) {
+            } else if (zone > 0.8) {
                 renditionRef.current?.next();
             } else {
                 toggleControls();

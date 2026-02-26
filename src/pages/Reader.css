@@ -29,12 +29,6 @@
     touch-action: none;
 }
 
-/* Force single-column for epub.js paginated */
-.reader-viewer.reader-paginated .epub-container {
-    column-count: 1 !important;
-    columns: auto !important;
-}
-
 /* ─── Transparent touch overlay (paginated mode) ─────── */
 
 .reader-touch-overlay {
