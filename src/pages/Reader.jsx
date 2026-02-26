@@ -371,8 +371,8 @@ export default function Reader() {
         momentumRef.current.animationFrame = requestAnimationFrame(step);
     }, [getScrollContainer]);
 
-    // ── Helper: get the word at screen coordinates via iframe ──
-    const getWordAtPoint = useCallback((screenX, screenY) => {
+    // ── Helper: get the text at screen coordinates via iframe ──
+    const getTextAtPoint = useCallback((screenX, screenY) => {
         try {
             // Find iframe - try viewerRef first (most reliable), then rendition manager
             const iframe = viewerRef.current?.querySelector('iframe')
@@ -384,12 +384,12 @@ export default function Reader() {
             const localX = screenX - iframeRect.left;
             const localY = screenY - iframeRect.top;
 
-            // Access iframe document (same-origin blob URLs from epub.js)
+            // Access iframe document
             let doc;
             try {
                 doc = iframe.contentDocument || iframe.contentWindow?.document;
             } catch (e) {
-                return null; // Cross-origin restriction
+                return null;
             }
             if (!doc || !doc.body) return null;
 
@@ -409,10 +409,20 @@ export default function Reader() {
                 const text = range.startContainer.textContent;
                 const offset = range.startOffset;
                 let start = offset, end = offset;
-                while (start > 0 && /[a-zA-Z']/.test(text[start - 1])) start--;
-                while (end < text.length && /[a-zA-Z']/.test(text[end])) end++;
-                const word = text.substring(start, end).replace(/'/g, '').trim();
-                if (word.length >= 2) return word;
+
+                if (settingsRef.current.dictionaryMode === 'sentence') {
+                    // Expand to sentence boundaries (. ! ? or newline)
+                    while (start > 0 && !/[.!?\n]/.test(text[start - 1])) start--;
+                    while (end < text.length && !/[.!?\n]/.test(text[end])) end++;
+                    const sentence = text.substring(start, end).trim();
+                    if (sentence.length >= 2) return sentence;
+                } else {
+                    // Expand to word boundaries
+                    while (start > 0 && /[a-zA-Z']/.test(text[start - 1])) start--;
+                    while (end < text.length && /[a-zA-Z']/.test(text[end])) end++;
+                    const word = text.substring(start, end).replace(/'/g, '').trim();
+                    if (word.length >= 2) return word;
+                }
             }
         } catch (_) { /* ignore */ }
         return null;
@@ -447,13 +457,13 @@ export default function Reader() {
                 if (overlayTouchRef.current) {
                     overlayTouchRef.current.longPressTriggered = true;
                 }
-                const word = getWordAtPoint(sx, sy);
-                if (word) {
-                    translateWord(word, sx, sy);
+                const text = getTextAtPoint(sx, sy);
+                if (text) {
+                    translateWord(text, sx, sy);
                 }
             }, 500);
         }
-    }, [stopMomentum, closeDictionary, getWordAtPoint, translateWord]);
+    }, [stopMomentum, closeDictionary, getTextAtPoint, translateWord]);
 
     const handleOverlayTouchMove = useCallback((e) => {
         if (!overlayTouchRef.current) return;
@@ -581,12 +591,12 @@ export default function Reader() {
             if (mouseLPRef.current) {
                 mouseLPRef.current.triggered = true;
             }
-            const word = getWordAtPoint(sx, sy);
-            if (word) {
-                translateWord(word, sx, sy);
+            const text = getTextAtPoint(sx, sy);
+            if (text) {
+                translateWord(text, sx, sy);
             }
         }, 500);
-    }, [getWordAtPoint, translateWord]);
+    }, [getTextAtPoint, translateWord]);
 
     const handleOverlayMouseUp = useCallback(() => {
         if (longPressTimerRef.current) {

@@ -26,6 +26,7 @@ export function SettingsProvider({ children }) {
                 // Load background image settings
                 if (saved.readerBgImage !== undefined) merged.readerBgImage = saved.readerBgImage;
                 if (saved.readerBgOpacity !== undefined) merged.readerBgOpacity = saved.readerBgOpacity;
+                if (saved.dictionaryMode !== undefined) merged.dictionaryMode = saved.dictionaryMode;
 
                 // Re-register custom fonts with FontFace API
                 if (merged.customFonts?.length) {

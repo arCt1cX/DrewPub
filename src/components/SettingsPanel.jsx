@@ -229,6 +229,25 @@ export default function SettingsPanel({ onClose }) {
                         </div>
                     </section>
 
+                    {/* ─── Dictionary Mode ──────────────────── */}
+                    <section className="settings-section">
+                        <h3 className="section-label">Dictionary Translation</h3>
+                        <div className="toggle-group">
+                            <button
+                                className={`toggle-btn ${settings.dictionaryMode === 'word' ? 'active' : ''}`}
+                                onClick={() => updateSetting('dictionaryMode', 'word')}
+                            >
+                                Word Only
+                            </button>
+                            <button
+                                className={`toggle-btn ${settings.dictionaryMode === 'sentence' ? 'active' : ''}`}
+                                onClick={() => updateSetting('dictionaryMode', 'sentence')}
+                            >
+                                Full Sentence
+                            </button>
+                        </div>
+                    </section>
+
                     {/* ─── Background Image ───────────────── */}
                     <section className="settings-section">
                         <h3 className="section-label">Background Image</h3>

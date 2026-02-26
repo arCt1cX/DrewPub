@@ -102,6 +102,7 @@ export const DEFAULT_SETTINGS = {
     libraryView: 'grid', // 'grid' | 'list'
     librarySortBy: 'lastReadAt', // 'title' | 'author' | 'lastReadAt'
     librarySortOrder: 'desc',
+    dictionaryMode: 'word', // 'word' | 'sentence'
 };
 
 export function applyTheme(theme) {
