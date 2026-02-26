@@ -25,7 +25,8 @@ export default function Header({
     sortBy,
     onSortChange,
     bookCount,
-    onUpload
+    onUpload,
+    onShowSettings
 }) {
     return (
         <header className="header glass">
