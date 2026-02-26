@@ -377,7 +377,9 @@ export default function Reader() {
     // ── Helper: get the word at screen coordinates via iframe ──
     const getWordAtPoint = useCallback((screenX, screenY) => {
         try {
-            const iframe = renditionRef.current?.manager?.container?.querySelector('iframe');
+            // Find iframe - try viewerRef first (most reliable), then rendition manager
+            const iframe = viewerRef.current?.querySelector('iframe')
+                || renditionRef.current?.manager?.container?.querySelector('iframe');
             if (!iframe) return null;
 
             const iframeRect = iframe.getBoundingClientRect();
@@ -385,13 +387,19 @@ export default function Reader() {
             const localX = screenX - iframeRect.left;
             const localY = screenY - iframeRect.top;
 
-            const doc = iframe.contentDocument;
-            if (!doc) return null;
+            // Access iframe document (same-origin blob URLs from epub.js)
+            let doc;
+            try {
+                doc = iframe.contentDocument || iframe.contentWindow?.document;
+            } catch (e) {
+                return null; // Cross-origin restriction
+            }
+            if (!doc || !doc.body) return null;
 
             let range;
-            if (doc.caretRangeFromPoint) {
+            if (typeof doc.caretRangeFromPoint === 'function') {
                 range = doc.caretRangeFromPoint(localX, localY);
-            } else if (doc.caretPositionFromPoint) {
+            } else if (typeof doc.caretPositionFromPoint === 'function') {
                 const pos = doc.caretPositionFromPoint(localX, localY);
                 if (pos) {
                     range = doc.createRange();
@@ -400,13 +408,13 @@ export default function Reader() {
                 }
             }
 
-            if (range && range.startContainer.nodeType === Node.TEXT_NODE) {
+            if (range && range.startContainer && range.startContainer.nodeType === Node.TEXT_NODE) {
                 const text = range.startContainer.textContent;
                 const offset = range.startOffset;
                 let start = offset, end = offset;
-                while (start > 0 && /[a-zA-Z]/.test(text[start - 1])) start--;
-                while (end < text.length && /[a-zA-Z]/.test(text[end])) end++;
-                const word = text.substring(start, end).trim();
+                while (start > 0 && /[a-zA-Z']/.test(text[start - 1])) start--;
+                while (end < text.length && /[a-zA-Z']/.test(text[end])) end++;
+                const word = text.substring(start, end).replace(/'/g, '').trim();
                 if (word.length >= 2) return word;
             }
         } catch (_) { /* ignore */ }
