@@ -56,11 +56,8 @@ export default function Reader() {
         scheduleHideControls();
     }, [scheduleHideControls]);
 
-    // ── Core tap handler ──────────────────────────────────
-    const handleTapRef = useRef(null);
-    handleTapRef.current = (clientX, viewerWidth) => {
-        const isPaginated = settingsRef.current.readingMode !== 'scroll';
-
+    // ── Toggle controls logic (shared by all interaction methods) ──
+    const toggleControls = useCallback(() => {
         if (showSettingsRef.current || showTocRef.current) {
             setShowSettings(false);
             setShowToc(false);
@@ -68,30 +65,12 @@ export default function Reader() {
             scheduleHideControls();
             return;
         }
-
-        if (!isPaginated) {
-            if (showControlsRef.current) {
-                setShowControls(false);
-            } else {
-                showControlsTemporarily();
-            }
-            return;
-        }
-
-        const zone = clientX / viewerWidth;
-
-        if (zone < 0.3) {
-            renditionRef.current?.prev();
-        } else if (zone > 0.7) {
-            renditionRef.current?.next();
+        if (showControlsRef.current) {
+            setShowControls(false);
         } else {
-            if (showControlsRef.current) {
-                setShowControls(false);
-            } else {
-                showControlsTemporarily();
-            }
+            showControlsTemporarily();
         }
-    };
+    }, [scheduleHideControls, showControlsTemporarily]);
 
     // ── Keyboard navigation ───────────────────────────────
     function handleKeyPress(e) {
@@ -102,56 +81,47 @@ export default function Reader() {
         }
     }
 
-    // ── Attach events using hooks.content (iframe access) ─
+    // ── Attach events to rendition ────────────────────────
     const attachRenditionEvents = useCallback((rendition) => {
         rendition.on('keyup', handleKeyPress);
 
-        // Desktop click inside iframe (forwarded by epub.js)
-        rendition.on('click', (e) => {
-            const viewerEl = viewerRef.current;
-            if (!viewerEl) return;
-            handleTapRef.current(e.clientX, viewerEl.clientWidth);
+        // For scroll mode: use the forwarded touch/click events from epub.js
+        // to toggle controls when user taps inside the iframe content
+        // (In paginated mode, the overlay handles everything)
+        rendition.on('click', () => {
+            if (settingsRef.current.readingMode === 'scroll') {
+                toggleControls();
+            }
         });
 
-        // Touch events: attach directly to each iframe's document
-        // This is the ONLY reliable way to get touch events from epub.js iframes
-        rendition.hooks.content.register((contents) => {
-            const doc = contents.document;
-            if (!doc) return;
-
-            let touchStartX = null;
-            let touchStartY = null;
-            let touchStartTime = 0;
-
-            doc.addEventListener('touchstart', (e) => {
-                if (e.touches.length === 1) {
-                    touchStartX = e.touches[0].clientX;
-                    touchStartY = e.touches[0].clientY;
-                    touchStartTime = Date.now();
+        // Touch events forwarded from epub.js iframe (for scroll mode on touch devices)
+        let touchStartData = null;
+        rendition.on('touchstart', (e) => {
+            if (settingsRef.current.readingMode !== 'scroll') return;
+            try {
+                const t = e.touches?.[0];
+                if (t) {
+                    touchStartData = { x: t.clientX, y: t.clientY, time: Date.now() };
                 }
-            }, { passive: true });
+            } catch (_) { /* ignore */ }
+        });
 
-            doc.addEventListener('touchend', (e) => {
-                if (touchStartX === null) return;
-
-                const touch = e.changedTouches[0];
-                const dx = Math.abs(touch.clientX - touchStartX);
-                const dy = Math.abs(touch.clientY - touchStartY);
-                const dt = Date.now() - touchStartTime;
-
-                // Tap = small movement + short hold
+        rendition.on('touchend', (e) => {
+            if (settingsRef.current.readingMode !== 'scroll') return;
+            if (!touchStartData) return;
+            try {
+                const t = e.changedTouches?.[0];
+                if (!t) return;
+                const dx = Math.abs(t.clientX - touchStartData.x);
+                const dy = Math.abs(t.clientY - touchStartData.y);
+                const dt = Date.now() - touchStartData.time;
                 if (dx < 20 && dy < 20 && dt < 400) {
-                    e.preventDefault();
-                    const viewerEl = viewerRef.current;
-                    if (!viewerEl) return;
-                    handleTapRef.current(touch.clientX, viewerEl.clientWidth);
+                    toggleControls();
                 }
-
-                touchStartX = null;
-                touchStartY = null;
-            }, { passive: false });
+            } catch (_) { /* ignore */ }
+            touchStartData = null;
         });
-    }, []);
+    }, [toggleControls]);
 
     // ── Relocated handler ─────────────────────────────────
     const makeRelocatedHandler = useCallback((book, destroyed_getter) => (location) => {
@@ -239,7 +209,7 @@ export default function Reader() {
         };
     }, [bookId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    // ── Reapply styles on settings change ────────────────
+    // ── Reapply styles on change ──────────────────────────
     useEffect(() => {
         if (renditionRef.current) {
             applyStyles(renditionRef.current, settings);
@@ -281,50 +251,39 @@ export default function Reader() {
         return () => { localDestroyed = true; };
     }, [settings.readingMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    function applyStyles(rendition, settings) {
-        const fontObj = FONTS.find(f => f.id === settings.font) || FONTS[0];
-        const theme = getTheme(settings.theme, settings.customTheme);
-        const isPaginated = settings.readingMode !== 'scroll';
+    function applyStyles(rendition, s) {
+        const fontObj = FONTS.find(f => f.id === s.font) || FONTS[0];
+        const theme = getTheme(s.theme, s.customTheme);
+        const isPag = s.readingMode !== 'scroll';
 
         rendition.themes.default({
             'html': {
-                ...(isPaginated ? {
-                    'column-count': '1 !important',
-                    'columns': 'auto !important',
-                } : {}),
+                ...(isPag ? { 'column-count': '1 !important', 'columns': 'auto !important' } : {}),
             },
             'body': {
                 'font-family': fontObj.family + ' !important',
-                'font-size': settings.fontSize + 'px !important',
-                'line-height': settings.lineHeight + ' !important',
+                'font-size': s.fontSize + 'px !important',
+                'line-height': s.lineHeight + ' !important',
                 'color': theme.readerText + ' !important',
                 'background': theme.readerBg + ' !important',
-                'text-align': settings.textAlign + ' !important',
-                'padding': settings.margins + 'px !important',
-                'max-width': settings.maxWidth + 'px !important',
+                'text-align': s.textAlign + ' !important',
+                'padding': s.margins + 'px !important',
+                'max-width': s.maxWidth + 'px !important',
                 'margin': '0 auto !important',
-                ...(isPaginated ? {
-                    'column-count': '1 !important',
-                    'columns': 'auto !important',
-                } : {}),
+                ...(isPag ? { 'column-count': '1 !important', 'columns': 'auto !important' } : {}),
             },
             'p': {
-                'margin-bottom': settings.paragraphSpacing + 'px !important',
+                'margin-bottom': s.paragraphSpacing + 'px !important',
                 'font-family': 'inherit !important',
                 'font-size': 'inherit !important',
                 'line-height': 'inherit !important',
             },
-            'a': {
-                'color': theme.accent + ' !important',
-            },
+            'a': { 'color': theme.accent + ' !important' },
             'h1, h2, h3, h4, h5, h6': {
                 'color': theme.readerText + ' !important',
                 'font-family': fontObj.family + ' !important',
             },
-            'img': {
-                'max-width': '100% !important',
-                'height': 'auto !important',
-            }
+            'img': { 'max-width': '100% !important', 'height': 'auto !important' },
         });
     }
 
@@ -335,11 +294,66 @@ export default function Reader() {
         scheduleHideControls();
     };
 
-    const handleGoBack = () => {
-        navigate('/');
-    };
+    const handleGoBack = () => navigate('/');
 
     const isPaginated = settings.readingMode !== 'scroll';
+
+    // ── Overlay touch/click handlers (PAGINATED mode only) ─
+    const overlayTouchRef = useRef(null);
+
+    const handleOverlayTouchStart = useCallback((e) => {
+        if (e.touches.length === 1) {
+            overlayTouchRef.current = {
+                x: e.touches[0].clientX,
+                y: e.touches[0].clientY,
+                time: Date.now(),
+            };
+        }
+    }, []);
+
+    const handleOverlayTouchEnd = useCallback((e) => {
+        if (!overlayTouchRef.current) return;
+        const t = e.changedTouches[0];
+        const dx = Math.abs(t.clientX - overlayTouchRef.current.x);
+        const dy = Math.abs(t.clientY - overlayTouchRef.current.y);
+        const dt = Date.now() - overlayTouchRef.current.time;
+        overlayTouchRef.current = null;
+
+        if (dx > 20 || dy > 20 || dt > 400) return; // Not a tap
+
+        e.preventDefault();
+        e.stopPropagation();
+
+        const viewerEl = viewerRef.current;
+        if (!viewerEl) return;
+        const rect = viewerEl.getBoundingClientRect();
+        const x = t.clientX - rect.left;
+        const zone = x / rect.width;
+
+        if (zone < 0.3) {
+            renditionRef.current?.prev();
+        } else if (zone > 0.7) {
+            renditionRef.current?.next();
+        } else {
+            toggleControls();
+        }
+    }, [toggleControls]);
+
+    const handleOverlayClick = useCallback((e) => {
+        const viewerEl = viewerRef.current;
+        if (!viewerEl) return;
+        const rect = viewerEl.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const zone = x / rect.width;
+
+        if (zone < 0.3) {
+            renditionRef.current?.prev();
+        } else if (zone > 0.7) {
+            renditionRef.current?.next();
+        } else {
+            toggleControls();
+        }
+    }, [toggleControls]);
 
     return (
         <div className="reader-page">
@@ -365,10 +379,21 @@ export default function Reader() {
                 />
             )}
 
+            {/* epub.js renders into this div */}
             <div
                 ref={viewerRef}
                 className={`reader-viewer ${isPaginated ? 'reader-paginated' : 'reader-scroll'}`}
             />
+
+            {/* TRANSPARENT OVERLAY for paginated mode — catches ALL touch/click */}
+            {!loading && isPaginated && (
+                <div
+                    className="reader-touch-overlay"
+                    onClick={handleOverlayClick}
+                    onTouchStart={handleOverlayTouchStart}
+                    onTouchEnd={handleOverlayTouchEnd}
+                />
+            )}
 
             {showSettings && (
                 <SettingsPanel onClose={() => setShowSettings(false)} />

@@ -35,6 +35,21 @@
     columns: auto !important;
 }
 
+/* ─── Transparent touch overlay (paginated mode) ─────── */
+
+.reader-touch-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 65;
+    background: transparent;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: none;
+    cursor: default;
+}
+
 /* epub.js container styling */
 .reader-viewer iframe {
     border: none !important;
