@@ -133,7 +133,7 @@ export default function Reader() {
             flow: isPaginated ? 'paginated' : 'scrolled',
             spread: 'none',
             minSpreadWidth: 99999,
-            manager: isPaginated ? 'default' : 'continuous',
+            manager: 'default', // Using default manager for both so each chapter is discrete
         };
     }
 
