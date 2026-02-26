@@ -140,7 +140,7 @@ export default function Reader() {
                     }
                 }
 
-                // Disable iOS Safari native long-press behavior
+                // Disable iOS Safari native long-press behavior inside iframe
                 const style = doc.createElement('style');
                 style.textContent = `
                     * {
@@ -151,67 +151,9 @@ export default function Reader() {
                 `;
                 doc.head.appendChild(style);
 
-                // Long-press handler for dictionary
-                let lpTimer = null;
-                let lpStartX = 0, lpStartY = 0;
-
-                doc.addEventListener('touchstart', (e) => {
-                    if (e.touches.length !== 1) return;
-                    const t = e.touches[0];
-                    lpStartX = t.clientX;
-                    lpStartY = t.clientY;
-
-                    lpTimer = setTimeout(() => {
-                        // Get word under touch
-                        let range;
-                        if (doc.caretRangeFromPoint) {
-                            range = doc.caretRangeFromPoint(t.clientX, t.clientY);
-                        } else if (doc.caretPositionFromPoint) {
-                            const pos = doc.caretPositionFromPoint(t.clientX, t.clientY);
-                            if (pos) {
-                                range = doc.createRange();
-                                range.setStart(pos.offsetNode, pos.offset);
-                                range.collapse(true);
-                            }
-                        }
-
-                        if (range && range.startContainer.nodeType === Node.TEXT_NODE) {
-                            const textNode = range.startContainer;
-                            const text = textNode.textContent;
-                            const offset = range.startOffset;
-
-                            // Find word boundaries
-                            let start = offset, end = offset;
-                            while (start > 0 && /[a-zA-Z]/.test(text[start - 1])) start--;
-                            while (end < text.length && /[a-zA-Z]/.test(text[end])) end++;
-
-                            const word = text.substring(start, end).trim();
-                            if (word.length >= 2) {
-                                // Get screen position (iframe offset + touch position)
-                                const iframe = renditionRef.current?.manager?.container?.querySelector('iframe');
-                                const iframeRect = iframe?.getBoundingClientRect() || { left: 0, top: 0 };
-                                translateWord(word, iframeRect.left + t.clientX, iframeRect.top + t.clientY);
-                            }
-                        }
-                    }, 500);
-                }, { passive: true });
-
-                doc.addEventListener('touchmove', (e) => {
-                    if (!lpTimer) return;
-                    const t = e.touches[0];
-                    if (Math.abs(t.clientX - lpStartX) > 10 || Math.abs(t.clientY - lpStartY) > 10) {
-                        clearTimeout(lpTimer);
-                        lpTimer = null;
-                    }
-                }, { passive: true });
-
-                doc.addEventListener('touchend', () => {
-                    if (lpTimer) { clearTimeout(lpTimer); lpTimer = null; }
-                }, { passive: true });
-
             } catch (_) { /* ignore */ }
         });
-    }, [toggleControls, translateWord]);
+    }, [toggleControls]);
 
     // ── Relocated handler ─────────────────────────────────
     const makeRelocatedHandler = useCallback((book, destroyed_getter) => (location) => {
@@ -432,8 +374,48 @@ export default function Reader() {
         momentumRef.current.animationFrame = requestAnimationFrame(step);
     }, [getScrollContainer]);
 
+    // ── Helper: get the word at screen coordinates via iframe ──
+    const getWordAtPoint = useCallback((screenX, screenY) => {
+        try {
+            const iframe = renditionRef.current?.manager?.container?.querySelector('iframe');
+            if (!iframe) return null;
+
+            const iframeRect = iframe.getBoundingClientRect();
+            // Convert screen coords to iframe-local coords
+            const localX = screenX - iframeRect.left;
+            const localY = screenY - iframeRect.top;
+
+            const doc = iframe.contentDocument;
+            if (!doc) return null;
+
+            let range;
+            if (doc.caretRangeFromPoint) {
+                range = doc.caretRangeFromPoint(localX, localY);
+            } else if (doc.caretPositionFromPoint) {
+                const pos = doc.caretPositionFromPoint(localX, localY);
+                if (pos) {
+                    range = doc.createRange();
+                    range.setStart(pos.offsetNode, pos.offset);
+                    range.collapse(true);
+                }
+            }
+
+            if (range && range.startContainer.nodeType === Node.TEXT_NODE) {
+                const text = range.startContainer.textContent;
+                const offset = range.startOffset;
+                let start = offset, end = offset;
+                while (start > 0 && /[a-zA-Z]/.test(text[start - 1])) start--;
+                while (end < text.length && /[a-zA-Z]/.test(text[end])) end++;
+                const word = text.substring(start, end).trim();
+                if (word.length >= 2) return word;
+            }
+        } catch (_) { /* ignore */ }
+        return null;
+    }, []);
+
     const handleOverlayTouchStart = useCallback((e) => {
         stopMomentum();
+        closeDictionary();
         if (e.touches.length === 1) {
             const t = e.touches[0];
             overlayTouchRef.current = {
@@ -443,6 +425,7 @@ export default function Reader() {
                 time: Date.now(),
                 moved: false,
                 pullOffset: 0,
+                longPressTriggered: false,
             };
             momentumRef.current.lastY = t.clientY;
             momentumRef.current.lastTime = Date.now();
@@ -452,8 +435,20 @@ export default function Reader() {
             if (viewerRef.current) {
                 viewerRef.current.style.transition = 'none';
             }
+
+            // Start long-press timer for dictionary
+            const sx = t.clientX, sy = t.clientY;
+            longPressTimerRef.current = setTimeout(() => {
+                if (overlayTouchRef.current) {
+                    overlayTouchRef.current.longPressTriggered = true;
+                }
+                const word = getWordAtPoint(sx, sy);
+                if (word) {
+                    translateWord(word, sx, sy);
+                }
+            }, 500);
         }
-    }, [stopMomentum]);
+    }, [stopMomentum, closeDictionary, getWordAtPoint, translateWord]);
 
     const handleOverlayTouchMove = useCallback((e) => {
         if (!overlayTouchRef.current) return;
@@ -469,6 +464,11 @@ export default function Reader() {
 
         if (totalDx > 10 || totalDy > 10) {
             overlayTouchRef.current.moved = true;
+            // Cancel long-press if finger moved
+            if (longPressTimerRef.current) {
+                clearTimeout(longPressTimerRef.current);
+                longPressTimerRef.current = null;
+            }
         }
 
         // Calculate instantaneous velocity for momentum
@@ -487,11 +487,8 @@ export default function Reader() {
                 const atBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 1;
 
                 if ((atTop && dy > 0) || (atBottom && dy < 0) || overlayTouchRef.current.pullOffset !== 0) {
-                    // Apply resistance pull
                     const resistance = 0.4;
                     overlayTouchRef.current.pullOffset += dy * resistance;
-
-                    // Cap the pull offset visually
                     const displayOffset = Math.max(-120, Math.min(120, overlayTouchRef.current.pullOffset));
                     viewerRef.current.style.transform = `translateY(${displayOffset}px)`;
                 } else {
@@ -502,6 +499,12 @@ export default function Reader() {
     }, [getScrollContainer]);
 
     const handleOverlayTouchEnd = useCallback((e) => {
+        // Cancel long-press timer
+        if (longPressTimerRef.current) {
+            clearTimeout(longPressTimerRef.current);
+            longPressTimerRef.current = null;
+        }
+
         if (!overlayTouchRef.current) return;
         const t = e.changedTouches[0];
         const dx = Math.abs(t.clientX - overlayTouchRef.current.startX);
@@ -509,6 +512,7 @@ export default function Reader() {
         const dt = Date.now() - overlayTouchRef.current.time;
         const wasMoved = overlayTouchRef.current.moved;
         const finalPull = overlayTouchRef.current.pullOffset;
+        const wasLongPress = overlayTouchRef.current.longPressTriggered;
         overlayTouchRef.current = null;
 
         // Reset transform with animation
@@ -516,6 +520,9 @@ export default function Reader() {
             viewerRef.current.style.transition = 'transform 0.3s cubic-bezier(0.2, 0, 0, 1)';
             viewerRef.current.style.transform = 'translateY(0)';
         }
+
+        // If long-press was triggered, don't do anything else
+        if (wasLongPress) return;
 
         // Check if pull met threshold for chapter change
         const threshold = 60;
@@ -547,7 +554,6 @@ export default function Reader() {
         const zone = x / rect.width;
 
         if (isCurrentlyPaginated) {
-            // Paginated: zone-based navigation
             if (zone < 0.2) {
                 renditionRef.current?.prev();
             } else if (zone > 0.8) {
@@ -556,12 +562,52 @@ export default function Reader() {
                 toggleControls();
             }
         } else {
-            // Scroll: any tap toggles controls
             toggleControls();
         }
     }, [toggleControls, startMomentum]);
 
+    // ── Mouse long-press for PC ──────────────────────────
+    const mouseLPRef = useRef(null);
+
+    const handleOverlayMouseDown = useCallback((e) => {
+        const sx = e.clientX, sy = e.clientY;
+        mouseLPRef.current = { x: sx, y: sy, triggered: false };
+        longPressTimerRef.current = setTimeout(() => {
+            if (mouseLPRef.current) {
+                mouseLPRef.current.triggered = true;
+            }
+            const word = getWordAtPoint(sx, sy);
+            if (word) {
+                translateWord(word, sx, sy);
+            }
+        }, 500);
+    }, [getWordAtPoint, translateWord]);
+
+    const handleOverlayMouseUp = useCallback(() => {
+        if (longPressTimerRef.current) {
+            clearTimeout(longPressTimerRef.current);
+            longPressTimerRef.current = null;
+        }
+        mouseLPRef.current = null;
+    }, []);
+
+    const handleOverlayMouseMove = useCallback((e) => {
+        if (!mouseLPRef.current || !longPressTimerRef.current) return;
+        const dx = Math.abs(e.clientX - mouseLPRef.current.x);
+        const dy = Math.abs(e.clientY - mouseLPRef.current.y);
+        if (dx > 10 || dy > 10) {
+            clearTimeout(longPressTimerRef.current);
+            longPressTimerRef.current = null;
+        }
+    }, []);
+
     const handleOverlayClick = useCallback((e) => {
+        // If mouse long-press was triggered, don't also toggle/navigate
+        if (mouseLPRef.current?.triggered) {
+            mouseLPRef.current = null;
+            return;
+        }
+
         const viewerEl = viewerRef.current;
         if (!viewerEl) return;
         const rect = viewerEl.getBoundingClientRect();
@@ -632,6 +678,9 @@ export default function Reader() {
                     onTouchStart={handleOverlayTouchStart}
                     onTouchMove={handleOverlayTouchMove}
                     onTouchEnd={handleOverlayTouchEnd}
+                    onMouseDown={handleOverlayMouseDown}
+                    onMouseUp={handleOverlayMouseUp}
+                    onMouseMove={handleOverlayMouseMove}
                 />
             )}
 
