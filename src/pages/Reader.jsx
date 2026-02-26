@@ -31,13 +31,11 @@ export default function Reader() {
     const [currentPage, setCurrentPage] = useState(0);
 
     const controlsTimerRef = useRef(null);
-    // Refs for values needed inside epubjs event handlers (avoid stale closures)
     const showControlsRef = useRef(true);
     const showSettingsRef = useRef(false);
     const showTocRef = useRef(false);
     const settingsRef = useRef(settings);
 
-    // Keep refs in sync
     useEffect(() => { showControlsRef.current = showControls; }, [showControls]);
     useEffect(() => { showSettingsRef.current = showSettings; }, [showSettings]);
     useEffect(() => { showTocRef.current = showToc; }, [showToc]);
@@ -58,11 +56,11 @@ export default function Reader() {
         scheduleHideControls();
     }, [scheduleHideControls]);
 
-    // ── Core tap handler (used by both mouse and touch) ────
-    const handleTap = useCallback((clientX) => {
+    // ── Core tap handler ──────────────────────────────────
+    const handleTapRef = useRef(null);
+    handleTapRef.current = (clientX, viewerWidth) => {
         const isPaginated = settingsRef.current.readingMode !== 'scroll';
 
-        // If any panel open → close it
         if (showSettingsRef.current || showTocRef.current) {
             setShowSettings(false);
             setShowToc(false);
@@ -72,7 +70,6 @@ export default function Reader() {
         }
 
         if (!isPaginated) {
-            // Scroll mode: any tap just toggles controls
             if (showControlsRef.current) {
                 setShowControls(false);
             } else {
@@ -81,25 +78,20 @@ export default function Reader() {
             return;
         }
 
-        // Paginated mode: use tap zones
-        const viewerEl = viewerRef.current;
-        if (!viewerEl) return;
-        const width = viewerEl.clientWidth;
-        const zone = clientX / width;
+        const zone = clientX / viewerWidth;
 
         if (zone < 0.3) {
             renditionRef.current?.prev();
         } else if (zone > 0.7) {
             renditionRef.current?.next();
         } else {
-            // Center tap → toggle controls
             if (showControlsRef.current) {
                 setShowControls(false);
             } else {
                 showControlsTemporarily();
             }
         }
-    }, [scheduleHideControls, showControlsTemporarily]);
+    };
 
     // ── Keyboard navigation ───────────────────────────────
     function handleKeyPress(e) {
@@ -110,46 +102,58 @@ export default function Reader() {
         }
     }
 
-    // ── Attach events to rendition (works inside iframe) ──
+    // ── Attach events using hooks.content (iframe access) ─
     const attachRenditionEvents = useCallback((rendition) => {
         rendition.on('keyup', handleKeyPress);
 
-        // For desktop: mouse click inside iframe
+        // Desktop click inside iframe (forwarded by epub.js)
         rendition.on('click', (e) => {
-            handleTap(e.clientX);
+            const viewerEl = viewerRef.current;
+            if (!viewerEl) return;
+            handleTapRef.current(e.clientX, viewerEl.clientWidth);
         });
 
-        // For touch devices (iPad etc): detect taps via touchstart/touchend
-        let touchStartX = null;
-        let touchStartY = null;
-        let touchStartTime = 0;
+        // Touch events: attach directly to each iframe's document
+        // This is the ONLY reliable way to get touch events from epub.js iframes
+        rendition.hooks.content.register((contents) => {
+            const doc = contents.document;
+            if (!doc) return;
 
-        rendition.on('touchstart', (e) => {
-            if (e.touches.length === 1) {
-                touchStartX = e.touches[0].clientX;
-                touchStartY = e.touches[0].clientY;
-                touchStartTime = Date.now();
-            }
+            let touchStartX = null;
+            let touchStartY = null;
+            let touchStartTime = 0;
+
+            doc.addEventListener('touchstart', (e) => {
+                if (e.touches.length === 1) {
+                    touchStartX = e.touches[0].clientX;
+                    touchStartY = e.touches[0].clientY;
+                    touchStartTime = Date.now();
+                }
+            }, { passive: true });
+
+            doc.addEventListener('touchend', (e) => {
+                if (touchStartX === null) return;
+
+                const touch = e.changedTouches[0];
+                const dx = Math.abs(touch.clientX - touchStartX);
+                const dy = Math.abs(touch.clientY - touchStartY);
+                const dt = Date.now() - touchStartTime;
+
+                // Tap = small movement + short hold
+                if (dx < 20 && dy < 20 && dt < 400) {
+                    e.preventDefault();
+                    const viewerEl = viewerRef.current;
+                    if (!viewerEl) return;
+                    handleTapRef.current(touch.clientX, viewerEl.clientWidth);
+                }
+
+                touchStartX = null;
+                touchStartY = null;
+            }, { passive: false });
         });
+    }, []);
 
-        rendition.on('touchend', (e) => {
-            if (touchStartX === null) return;
-            const touch = e.changedTouches[0];
-            const dx = Math.abs(touch.clientX - touchStartX);
-            const dy = Math.abs(touch.clientY - touchStartY);
-            const dt = Date.now() - touchStartTime;
-
-            // Only count as a tap if finger moved < 15px and held < 500ms
-            if (dx < 15 && dy < 15 && dt < 500) {
-                handleTap(touch.clientX);
-            }
-
-            touchStartX = null;
-            touchStartY = null;
-        });
-    }, [handleTap]);
-
-    // ── Common relocated handler ──────────────────────────
+    // ── Relocated handler ─────────────────────────────────
     const makeRelocatedHandler = useCallback((book, destroyed_getter) => (location) => {
         if (destroyed_getter()) return;
         const cfi = location.start.cfi;
@@ -167,7 +171,7 @@ export default function Reader() {
         if (chapter) setChapterTitle(chapter.label?.trim() || '');
     }, [bookId]);
 
-    // ── Create rendition options ──────────────────────────
+    // ── Rendition options ─────────────────────────────────
     function getRenditionOptions(readingMode) {
         const isPaginated = readingMode !== 'scroll';
         return {
@@ -176,8 +180,6 @@ export default function Reader() {
             flow: isPaginated ? 'paginated' : 'scrolled',
             spread: 'none',
             manager: isPaginated ? 'default' : 'continuous',
-            // Force single column in paginated mode
-            ...(isPaginated ? { allowScriptedContent: false } : {}),
         };
     }
 
@@ -190,12 +192,10 @@ export default function Reader() {
             try {
                 const bookData = await getBook(bookId);
                 if (!bookData || destroyed) return;
-
                 setBookMeta(bookData);
 
                 const book = ePub(bookData.data);
                 bookRef.current = book;
-
                 await book.ready;
 
                 const rendition = book.renderTo(viewerRef.current, getRenditionOptions(settings.readingMode));
@@ -221,7 +221,6 @@ export default function Reader() {
 
                 setLoading(false);
                 showControlsTemporarily();
-
             } catch (e) {
                 console.error('Failed to load book:', e);
                 setLoading(false);
@@ -251,7 +250,7 @@ export default function Reader() {
         settings.textAlign, settings.theme, settings.customTheme
     ]);
 
-    // ── Rebuild rendition on reading mode change ──────────
+    // ── Rebuild on reading mode change ────────────────────
     useEffect(() => {
         if (!bookRef.current || !viewerRef.current || loading) return;
 
@@ -289,7 +288,6 @@ export default function Reader() {
 
         rendition.themes.default({
             'html': {
-                // Force single column in paginated mode
                 ...(isPaginated ? {
                     'column-count': '1 !important',
                     'columns': 'auto !important',
@@ -305,7 +303,6 @@ export default function Reader() {
                 'padding': settings.margins + 'px !important',
                 'max-width': settings.maxWidth + 'px !important',
                 'margin': '0 auto !important',
-                // Force single column
                 ...(isPaginated ? {
                     'column-count': '1 !important',
                     'columns': 'auto !important',
@@ -342,24 +339,6 @@ export default function Reader() {
         navigate('/');
     };
 
-    // ── Outer wrapper tap (for margins outside iframe) ────
-    const handleOuterTouchEnd = useCallback((e) => {
-        // Only handle single-touch taps on the outer wrapper
-        const touch = e.changedTouches?.[0];
-        if (!touch) return;
-        const viewerEl = viewerRef.current;
-        if (!viewerEl) return;
-        const rect = viewerEl.getBoundingClientRect();
-        handleTap(touch.clientX - rect.left + (rect.left > 0 ? rect.left : 0));
-    }, [handleTap]);
-
-    const handleOuterClick = useCallback((e) => {
-        const viewerEl = viewerRef.current;
-        if (!viewerEl) return;
-        const rect = viewerEl.getBoundingClientRect();
-        handleTap(e.clientX - rect.left);
-    }, [handleTap]);
-
     const isPaginated = settings.readingMode !== 'scroll';
 
     return (
@@ -389,8 +368,6 @@ export default function Reader() {
             <div
                 ref={viewerRef}
                 className={`reader-viewer ${isPaginated ? 'reader-paginated' : 'reader-scroll'}`}
-                onClick={handleOuterClick}
-                onTouchEnd={handleOuterTouchEnd}
             />
 
             {showSettings && (
