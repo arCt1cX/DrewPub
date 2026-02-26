@@ -293,7 +293,7 @@ export default function Reader() {
             'font-size': s.fontSize + 'px !important',
             'line-height': s.lineHeight + ' !important',
             'color': theme.readerText + ' !important',
-            'background': theme.readerBg + ' !important',
+            'background': 'transparent !important',
             'text-align': s.textAlign + ' !important',
         };
 
