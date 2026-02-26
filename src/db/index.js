@@ -99,3 +99,25 @@ export async function getAllSettings() {
     }
     return map;
 }
+
+// ─── Assets ─────────────────────────────────────────
+
+export async function saveAsset(id, dataBlob) {
+    const db = await getDB();
+    // We can just store them in settings for simplicity, or create a new store
+    // Let's create an 'assets' store in upgrade if we bump version, but to avoid bumping:
+    // we can just store them in settings as binary blobs with a prefix 'asset_'.
+    return db.put('settings', { key: `asset_${id}`, value: dataBlob });
+}
+
+export async function getAsset(id) {
+    const db = await getDB();
+    const result = await db.get('settings', `asset_${id}`);
+    return result?.value || null;
+}
+
+export async function deleteAsset(id) {
+    const db = await getDB();
+    return db.delete('settings', `asset_${id}`);
+}
+

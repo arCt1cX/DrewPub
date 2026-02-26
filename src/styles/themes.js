@@ -74,6 +74,7 @@ export const THEMES = {
 };
 
 export const FONTS = [
+    { id: 'custom', name: 'Custom Font', family: "'CustomUserFont', sans-serif" },
     { id: 'inter', name: 'Inter', family: "'Inter', sans-serif" },
     { id: 'literata', name: 'Literata', family: "'Literata', serif" },
     { id: 'merriweather', name: 'Merriweather', family: "'Merriweather', serif" },
@@ -88,6 +89,8 @@ export const FONTS = [
 export const DEFAULT_SETTINGS = {
     theme: 'dark',
     customTheme: null,
+    customFontId: null,
+    customBgId: null,
     font: 'literata',
     fontSize: 18,
     lineHeight: 1.7,
