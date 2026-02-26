@@ -93,9 +93,13 @@ export default function Reader() {
                 const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, null, false);
                 let node;
                 while ((node = walker.nextNode())) {
-                    // Replace literal .&nbsp; and standalone &nbsp; with proper space
-                    if (node.nodeValue && node.nodeValue.includes('\u00a0')) {
-                        node.nodeValue = node.nodeValue.replace(/\.\u00a0/g, '. ').replace(/\u00a0/g, ' ');
+                    // Replace literal .&nbsp;, standalone &nbsp; (string) or \u00a0 (char) with proper space
+                    if (node.nodeValue && (node.nodeValue.includes('\u00a0') || node.nodeValue.includes('&nbsp;'))) {
+                        node.nodeValue = node.nodeValue
+                            .replace(/\.\u00a0/g, '. ')
+                            .replace(/\u00a0/g, ' ')
+                            .replace(/\.&nbsp;/g, '. ')
+                            .replace(/&nbsp;/g, ' ');
                     }
                 }
             } catch (_) { /* ignore */ }
