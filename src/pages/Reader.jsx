@@ -28,7 +28,7 @@ export default function Reader() {
     const [showControls, setShowControls] = useState(true);
     const [showSettings, setShowSettings] = useState(false);
     const [showToc, setShowToc] = useState(false);
-    const [totalPages, setTotalPages] = useState(0);
+    const [totalPages, setTotalPages] = useState('Calculating...');
     const [currentPage, setCurrentPage] = useState(0);
 
     // Dictionary popup state
@@ -141,12 +141,31 @@ export default function Reader() {
                 }
 
                 // Disable iOS Safari callout on links etc. inside iframe
-                // NOTE: Do NOT set user-select:none here — it breaks caretRangeFromPoint on iOS
                 const style = doc.createElement('style');
                 style.textContent = `
                     * { -webkit-touch-callout: none !important; }
                 `;
+
+                // Inject custom fonts into the iframe
+                if (settingsRef.current?.customFonts?.length) {
+                    let fontFaces = '';
+                    for (const cf of settingsRef.current.customFonts) {
+                        fontFaces += `
+                            @font-face {
+                                font-family: "${cf.family}";
+                                src: url("${cf.dataUrl}");
+                            }
+                        `;
+                    }
+                    style.textContent += fontFaces;
+                }
                 doc.head.appendChild(style);
+
+                // Inject Google Fonts link
+                const fontLink = doc.createElement('link');
+                fontLink.rel = 'stylesheet';
+                fontLink.href = 'https://fonts.googleapis.com/css2?family=Crimson+Text:ital,wght@0,400;0,600;0,700;1,400&family=Inter:wght@300;400;500;600;700&family=Literata:ital,opsz,wght@0,7..72,400;0,7..72,500;0,7..72,600;0,7..72,700;1,7..72,400&family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Merriweather:ital,wght@0,300;0,400;0,700;1,300;1,400&family=Roboto+Slab:wght@300;400;500;600;700&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,500;0,8..60,600;0,8..60,700;1,8..60,400&display=swap';
+                doc.head.appendChild(fontLink);
 
             } catch (_) { /* ignore */ }
         });
@@ -213,14 +232,20 @@ export default function Reader() {
                     await rendition.display();
                 }
 
-                await book.locations.generate(1024);
-                setTotalPages(book.locations.length());
-
+                // Attach events immediately after display
                 rendition.on('relocated', makeRelocatedHandler(book, destroyed_getter));
                 attachRenditionEvents(rendition);
 
                 setLoading(false);
                 showControlsTemporarily();
+
+                // Non-blocking background generation of locations
+                book.locations.generate(1024).then(() => {
+                    if (!destroyed_getter()) {
+                        setTotalPages(book.locations.length());
+                    }
+                }).catch(err => console.warn('Paging generation failed:', err));
+
             } catch (e) {
                 console.error('Failed to load book:', e);
                 setLoading(false);
@@ -289,7 +314,7 @@ export default function Reader() {
         const isPag = s.readingMode !== 'scroll';
 
         const bodyStyles = {
-            'font-family': fontObj.family + ' !important',
+            'font-family': `"${fontObj.family.replace(/['"]/g, '')}", serif !important`,
             'font-size': s.fontSize + 'px !important',
             'line-height': s.lineHeight + ' !important',
             'color': theme.readerText + ' !important',
@@ -315,7 +340,7 @@ export default function Reader() {
             'a': { 'color': theme.accent + ' !important' },
             'h1, h2, h3, h4, h5, h6': {
                 'color': theme.readerText + ' !important',
-                'font-family': fontObj.family + ' !important',
+                'font-family': `"${fontObj.family.replace(/['"]/g, '')}", serif !important`,
             },
             'img': { 'max-width': '100% !important', 'height': 'auto !important' },
         });
