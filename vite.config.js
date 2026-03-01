@@ -60,19 +60,6 @@ export default defineConfig({
               },
               cacheableResponse: { statuses: [0, 200] }
             }
-          },
-          {
-            // Cache TTS audio responses
-            urlPattern: /\/api\/tts/i,
-            handler: 'NetworkFirst',
-            options: {
-              cacheName: 'tts-audio-cache',
-              expiration: {
-                maxEntries: 200,
-                maxAgeSeconds: 60 * 60 * 24 * 7 // 1 week
-              },
-              cacheableResponse: { statuses: [0, 200] }
-            }
           }
         ]
       }
