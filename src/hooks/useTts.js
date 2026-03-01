@@ -42,6 +42,7 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
     const settingsRef = useRef(settings);
     const audioElRef = useRef(null);
     const voiceOverridesRef = useRef({});
+    const loopIdRef = useRef(0);
 
     useEffect(() => { settingsRef.current = settings; }, [settings]);
 
@@ -109,9 +110,11 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
         if (!segment?.element) return;
 
         const element = segment.element;
-        // Normalize search text same way as extraction
-        const searchRaw = segment.text.replace(/\s+/g, ' ');
-        const searchSub = searchRaw.substring(0, Math.min(25, searchRaw.length));
+        const needle = segment.text.replace(/\s+/g, ' ').trim();
+        if (needle.length < 2) return;
+
+        // Use a long-enough search key to uniquely identify the sentence
+        const searchKey = needle.substring(0, Math.min(50, needle.length));
 
         try {
             const walker = doc.createTreeWalker(element, NodeFilter.SHOW_TEXT);
@@ -119,20 +122,37 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
             let found = false;
 
             while ((node = walker.nextNode())) {
-                // Normalize whitespace in DOM text for comparison
-                const nodeText = (node.textContent || '').replace(/\s+/g, ' ');
-                if (nodeText.includes(searchSub)) {
-                    found = true;
-                    const span = doc.createElement('span');
-                    span.className = 'tts-highlight';
-                    node.parentNode.insertBefore(span, node);
-                    span.appendChild(node);
+                const nodeText = node.textContent;
+                const idx = nodeText.indexOf(searchKey);
 
-                    // Only scroll if element is not already visible
-                    const rect = span.getBoundingClientRect();
-                    const viewH = doc.documentElement.clientHeight || 600;
-                    if (rect.bottom < 0 || rect.top > viewH) {
-                        span.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                if (idx !== -1) {
+                    found = true;
+                    try {
+                        // Split the text node to wrap only the matching portion
+                        let target = node;
+                        if (idx > 0) target = node.splitText(idx);
+                        const endPos = Math.min(target.textContent.length, needle.length);
+                        if (endPos < target.textContent.length) {
+                            target.splitText(endPos);
+                        }
+
+                        const span = doc.createElement('span');
+                        span.className = 'tts-highlight';
+                        target.parentNode.insertBefore(span, target);
+                        span.appendChild(target);
+
+                        // Only scroll if not already visible
+                        const rect = span.getBoundingClientRect();
+                        const viewH = doc.documentElement.clientHeight || 600;
+                        if (rect.bottom < 0 || rect.top > viewH) {
+                            span.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        }
+                    } catch {
+                        // splitText failed — wrap entire text node
+                        const span = doc.createElement('span');
+                        span.className = 'tts-highlight';
+                        node.parentNode.insertBefore(span, node);
+                        span.appendChild(node);
                     }
                     break;
                 }
@@ -373,6 +393,7 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
 
     // ── Playback loop ───────────────────────────────────────
     const playFromIndex = useCallback(async (startIndex) => {
+        const thisLoop = ++loopIdRef.current; // unique ID for THIS loop
         stoppedRef.current = false;
         setTtsPlaying(true);
         setTtsPaused(false);
@@ -381,6 +402,8 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
         const MAX_FAILURES = 3;
 
         for (let i = startIndex; i < segmentsRef.current.length; i++) {
+            // Bail if a newer loop started (nextSegment/prevSegment)
+            if (loopIdRef.current !== thisLoop) return;
             if (stoppedRef.current || !activeRef.current) break;
 
             // Prefetch next segment
@@ -393,6 +416,9 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
             }
 
             const success = await speakSegment(i);
+
+            // Check again after await — loop may have been superseded
+            if (loopIdRef.current !== thisLoop) return;
             if (!success && stoppedRef.current) break;
             if (!success) {
                 consecutiveFailures++;
@@ -408,6 +434,9 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
             consecutiveFailures = 0;
         }
 
+        // Only proceed if this is still the active loop
+        if (loopIdRef.current !== thisLoop) return;
+
         // Auto-advance to next chapter
         if (!stoppedRef.current && activeRef.current && consecutiveFailures < MAX_FAILURES) {
             if (settingsRef.current.ttsAutoAdvance) {
@@ -418,6 +447,8 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
 
                     await rendition.next();
                     await new Promise(resolve => setTimeout(resolve, 1000));
+
+                    if (loopIdRef.current !== thisLoop) return;
 
                     const doc = getIframeDoc();
                     if (doc && activeRef.current && !stoppedRef.current) {

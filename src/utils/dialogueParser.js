@@ -172,6 +172,24 @@ export function parseDialogue(segments) {
 
     let lastSpeaker1 = null; // most recent speaker
     let lastSpeaker2 = null; // second-most recent (for turn-taking)
+    let chapterPovName = null; // POV character from chapter start
+
+    // ── Detect POV chapter start ──
+    // If first segment is very short (just a name), it's likely a POV indicator
+    if (segments.length > 1 && segments[0].text.length < 30) {
+        const first = segments[0].text.trim();
+        // Single word or "First Last", all caps or title case, and is a plausible name
+        if (/^[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?$/.test(first) &&
+            !COMMON_NON_NAMES.has(first.toLowerCase())) {
+            chapterPovName = first.split(/\s+/)[0]; // use first name
+            // Register as character
+            if (!characters[chapterPovName]) {
+                let gender = guessGender(chapterPovName);
+                if (gender === 'unknown') gender = guessGenderFromContext(chapterPovName, fullText);
+                characters[chapterPovName] = { gender, count: 0 };
+            }
+        }
+    }
 
     for (let idx = 0; idx < segments.length; idx++) {
         const seg = segments[idx];
@@ -183,13 +201,35 @@ export function parseDialogue(segments) {
             continue;
         }
 
-        // ── Check for quoted speech ──
+        // ── Check for quoted speech (complete OR partial quotes) ──
         let hasDialogue = false;
+
+        // Check complete quoted pairs
         for (const pattern of QUOTE_PATTERNS) {
             pattern.lastIndex = 0;
             if (pattern.test(seg.text)) {
                 hasDialogue = true;
                 break;
+            }
+        }
+
+        // Also detect partial quotes (sentence was split mid-dialogue)
+        if (!hasDialogue) {
+            const t = seg.text.trim();
+            const OPEN_CHARS = /^["\u201C\u00AB\u2018]/;
+            const CLOSE_CHARS = /["\u201D\u00BB\u2019][.,!?;:\s]*$/;
+            // Starts with opening quote
+            if (OPEN_CHARS.test(t)) hasDialogue = true;
+            // Ends with closing quote (but not an apostrophe mid-word)
+            else if (CLOSE_CHARS.test(t) && !/\w['\u2019]\s*$/.test(t)) hasDialogue = true;
+            // Previous segment was dialogue and this looks like continuation
+            else if (idx > 0 && enhanced[idx - 1]?.segType === 'dialogue' &&
+                     !/^[A-Z][a-z]+ (said|asked|replied|whispered|shouted)/.test(t)) {
+                // Check if previous segment ended without closing its quote
+                const prevText = enhanced[idx - 1]?.text || '';
+                const openCount = (prevText.match(/["\u201C\u00AB]/g) || []).length;
+                const closeCount = (prevText.match(/["\u201D\u00BB]/g) || []).length;
+                if (openCount > closeCount) hasDialogue = true;
             }
         }
 

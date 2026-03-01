@@ -116,9 +116,9 @@ export function createTtsSegments(blocks) {
 }
 
 /**
- * Split text into sentences — QUOTE-AWARE.
- * Never splits inside quoted speech so dialogue stays intact.
- * Handles abbreviations, ellipses, smart/straight quotes.
+ * Split text into sentences — robust, no fragile quote-depth tracking.
+ * Protects abbreviations and decimal numbers.
+ * Splits on sentence-ending punctuation followed by whitespace.
  */
 function splitIntoSentences(text) {
     if (!text || text.length < 2) return [text].filter(Boolean);
@@ -126,77 +126,45 @@ function splitIntoSentences(text) {
     // ── Protect abbreviations ──
     const abbrevsRe = /(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|vs|etc|e\.g|i\.e|a\.m|p\.m|vol|ch|no|fig)\./gi;
     let processed = text;
-    const abbrevMap = [];
+    const placeholders = [];
     processed = processed.replace(abbrevsRe, (match) => {
-        const ph = `\x00A${abbrevMap.length}\x00`;
-        abbrevMap.push(match);
+        const ph = `\x00P${placeholders.length}\x00`;
+        placeholders.push(match);
         return ph;
     });
 
-    // ── Quote-aware walk ──
-    const sentences = [];
-    let current = '';
-    let quoteDepth = 0;
+    // Protect decimal numbers (3.14, 1.5)
+    processed = processed.replace(/(\d)\.(\d)/g, '$1\x00N$2');
 
-    const OPEN_Q  = new Set(['\u201C', '\u00AB', '\u2018']);
-    const CLOSE_Q = new Set(['\u201D', '\u00BB', '\u2019']);
+    // Normalize triple dots to ellipsis char
+    processed = processed.replace(/\.{3}/g, '\u2026');
 
-    for (let i = 0; i < processed.length; i++) {
-        const ch = processed[i];
-        current += ch;
+    // ── Split on sentence-ending punctuation ──
+    // Lookbehind: . ! ? … optionally followed by closing quotes
+    // Then one or more whitespace
+    const parts = processed.split(/(?<=[.!?\u2026][\u201D\u2019\u00BB\u00BB"'\)]*) +/);
 
-        // Track quote depth
-        if (OPEN_Q.has(ch)) {
-            quoteDepth++;
-        } else if (CLOSE_Q.has(ch)) {
-            quoteDepth = Math.max(0, quoteDepth - 1);
-        } else if (ch === '"') {
-            // ASCII straight quote — toggle
-            if (quoteDepth > 0) quoteDepth--;
-            else quoteDepth++;
+    // ── Restore placeholders ──
+    const restored = parts.map(p => {
+        let r = p;
+        for (let k = 0; k < placeholders.length; k++) {
+            r = r.split(`\x00P${k}\x00`).join(placeholders[k]);
         }
-        if (quoteDepth > 4) quoteDepth = 0; // safety reset
+        r = r.split('\x00N').join('.');
+        return r.trim();
+    }).filter(s => s.length > 0);
 
-        // Never split inside quotes
-        if (quoteDepth > 0) continue;
+    // ── Merge very short fragments with previous ──
+    if (restored.length <= 1) return restored;
 
-        // Detect sentence-ending punctuation
-        let isEnd = false;
-        if (ch === '!' || ch === '?' || ch === '\u2026') {
-            isEnd = true;
-        } else if (ch === '.') {
-            // Consume ellipsis (...)
-            if (i + 2 < processed.length && processed[i + 1] === '.' && processed[i + 2] === '.') {
-                current += '..';
-                i += 2;
-            }
-            isEnd = true;
-        }
-
-        if (!isEnd) continue;
-
-        // Look ahead for whitespace + uppercase / opening quote
-        let j = i + 1;
-        while (j < processed.length && processed[j] === ' ') j++;
-
-        if (j > i + 1 && j < processed.length) {
-            const next = processed[j];
-            if (/[A-Z]/.test(next) || OPEN_Q.has(next) || next === '"') {
-                sentences.push(current.trim());
-                current = '';
-                i = j - 1;
-            }
+    const merged = [restored[0]];
+    for (let i = 1; i < restored.length; i++) {
+        if (restored[i].length < 12) {
+            merged[merged.length - 1] += ' ' + restored[i];
+        } else {
+            merged.push(restored[i]);
         }
     }
 
-    if (current.trim()) sentences.push(current.trim());
-
-    // ── Restore abbreviations ──
-    return sentences.map(s => {
-        let r = s;
-        for (let k = 0; k < abbrevMap.length; k++) {
-            r = r.replace(`\x00A${k}\x00`, abbrevMap[k]);
-        }
-        return r;
-    }).filter(s => s.length > 0);
+    return merged;
 }
