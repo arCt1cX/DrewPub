@@ -11,6 +11,7 @@ export default function ReaderControls({
     onBack,
     onToggleToc,
     onToggleSettings,
+    onToggleTts,
     onPrev,
     onNext,
     isPaginated,
@@ -27,6 +28,9 @@ export default function ReaderControls({
                     {chapterTitle && <span className="reader-chapter">{chapterTitle}</span>}
                 </div>
                 <div className="reader-top-actions">
+                    <button className="btn-icon reader-btn" onClick={onToggleTts} title="Text-to-Speech">
+                        🔊
+                    </button>
                     <button className="btn-icon reader-btn" onClick={onToggleToc} title="Table of Contents">
                         ☰
                     </button>

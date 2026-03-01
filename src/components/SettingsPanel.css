@@ -318,3 +318,87 @@
     border: 1px solid var(--border);
     flex-shrink: 0;
 }
+
+/* ── TTS Settings ────────────────────────────────────── */
+
+.tts-setting-row {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.tts-key-input-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.tts-key-input {
+    flex: 1;
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.82rem;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+.tts-key-input:focus {
+    border-color: var(--accent);
+}
+
+.tts-key-input::placeholder {
+    color: var(--text-secondary);
+    opacity: 0.5;
+}
+
+.tts-test-btn {
+    flex: none;
+    min-width: 60px;
+}
+
+.tts-key-result {
+    font-size: 0.75rem;
+    font-weight: 500;
+    padding: 2px 0;
+}
+
+.tts-key-result.ok {
+    color: #4caf50;
+}
+
+.tts-key-result.err {
+    color: #ff6b6b;
+}
+
+.tts-voice-select {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.82rem;
+    outline: none;
+    cursor: pointer;
+    transition: border-color 0.2s;
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23a0a0b0'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    padding-right: 30px;
+}
+
+.tts-voice-select:focus {
+    border-color: var(--accent);
+}
+
+.tts-voice-select option {
+    background: #16213e;
+    color: var(--text);
+}

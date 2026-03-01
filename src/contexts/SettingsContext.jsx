@@ -27,6 +27,12 @@ export function SettingsProvider({ children }) {
                 if (saved.readerBgImage !== undefined) merged.readerBgImage = saved.readerBgImage;
                 if (saved.readerBgOpacity !== undefined) merged.readerBgOpacity = saved.readerBgOpacity;
                 if (saved.dictionaryMode !== undefined) merged.dictionaryMode = saved.dictionaryMode;
+                // TTS settings
+                if (saved.ttsNarratorVoice !== undefined) merged.ttsNarratorVoice = saved.ttsNarratorVoice;
+                if (saved.ttsMaleVoice !== undefined) merged.ttsMaleVoice = saved.ttsMaleVoice;
+                if (saved.ttsFemaleVoice !== undefined) merged.ttsFemaleVoice = saved.ttsFemaleVoice;
+                if (saved.ttsSpeed !== undefined) merged.ttsSpeed = saved.ttsSpeed;
+                if (saved.ttsAutoAdvance !== undefined) merged.ttsAutoAdvance = saved.ttsAutoAdvance;
 
                 // Re-register custom fonts with FontFace API
                 if (merged.customFonts?.length) {

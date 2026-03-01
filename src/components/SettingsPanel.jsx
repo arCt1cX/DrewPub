@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import { useSettings } from '../contexts/SettingsContext';
 import { FONTS, THEMES, getTheme } from '../styles/themes';
 import './SettingsPanel.css';
@@ -11,6 +11,22 @@ export default function SettingsPanel({ onClose }) {
     // All fonts: built-in + custom
     const allFonts = [...FONTS, ...(settings.customFonts || [])];
     const currentFont = allFonts.find(f => f.id === settings.font) || FONTS[0];
+
+    const [systemVoices, setSystemVoices] = useState([]);
+
+    // Load system voices on mount
+    useEffect(() => {
+        const loadVoices = () => {
+            const voices = window.speechSynthesis.getVoices();
+            // Filter for English by default or all if none
+            const english = voices.filter(v => v.lang.startsWith('en'));
+            setSystemVoices(english.length > 0 ? english : voices);
+        };
+        loadVoices();
+        if (window.speechSynthesis.onvoiceschanged !== undefined) {
+            window.speechSynthesis.onvoiceschanged = loadVoices;
+        }
+    }, []);
 
     const handleCustomThemeChange = (field, value) => {
         const current = settings.customTheme || { ...THEMES.dark, id: 'custom', name: 'Custom' };
@@ -31,7 +47,6 @@ export default function SettingsPanel({ onClose }) {
             const reader = new FileReader();
             reader.onload = async () => {
                 const dataUrl = reader.result;
-                // Register with FontFace API
                 const face = new FontFace(familyName, `url(${dataUrl})`);
                 await face.load();
                 document.fonts.add(face);
@@ -45,8 +60,6 @@ export default function SettingsPanel({ onClose }) {
         } catch (err) {
             console.error('Failed to load font:', err);
         }
-
-        // Clear input so same file can be re-selected
         e.target.value = '';
     };
 
@@ -123,7 +136,6 @@ export default function SettingsPanel({ onClose }) {
                                     )}
                                 </div>
                             ))}
-                            {/* Upload font button */}
                             <button
                                 className="font-btn font-upload-btn"
                                 onClick={() => fontInputRef.current?.click()}
@@ -143,7 +155,6 @@ export default function SettingsPanel({ onClose }) {
                     {/* ─── Typography Controls ─────────────── */}
                     <section className="settings-section">
                         <h3 className="section-label">Typography</h3>
-
                         <div className="slider-row">
                             <span className="slider-label">Size</span>
                             <input
@@ -156,7 +167,6 @@ export default function SettingsPanel({ onClose }) {
                             />
                             <span className="slider-value">{settings.fontSize}px</span>
                         </div>
-
                         <div className="slider-row">
                             <span className="slider-label">Line Height</span>
                             <input
@@ -168,45 +178,6 @@ export default function SettingsPanel({ onClose }) {
                                 onChange={e => updateSetting('lineHeight', Number(e.target.value))}
                             />
                             <span className="slider-value">{settings.lineHeight}</span>
-                        </div>
-
-                        <div className="slider-row">
-                            <span className="slider-label">Paragraph</span>
-                            <input
-                                type="range"
-                                min="0"
-                                max="40"
-                                step="2"
-                                value={settings.paragraphSpacing}
-                                onChange={e => updateSetting('paragraphSpacing', Number(e.target.value))}
-                            />
-                            <span className="slider-value">{settings.paragraphSpacing}px</span>
-                        </div>
-
-                        <div className="slider-row">
-                            <span className="slider-label">Margins</span>
-                            <input
-                                type="range"
-                                min="8"
-                                max="80"
-                                step="4"
-                                value={settings.margins}
-                                onChange={e => updateSetting('margins', Number(e.target.value))}
-                            />
-                            <span className="slider-value">{settings.margins}px</span>
-                        </div>
-
-                        <div className="slider-row">
-                            <span className="slider-label">Max Width</span>
-                            <input
-                                type="range"
-                                min="400"
-                                max="1200"
-                                step="20"
-                                value={settings.maxWidth}
-                                onChange={e => updateSetting('maxWidth', Number(e.target.value))}
-                            />
-                            <span className="slider-value">{settings.maxWidth}px</span>
                         </div>
                     </section>
 
@@ -225,25 +196,6 @@ export default function SettingsPanel({ onClose }) {
                                 onClick={() => updateSetting('textAlign', 'justify')}
                             >
                                 ≣ Justified
-                            </button>
-                        </div>
-                    </section>
-
-                    {/* ─── Dictionary Mode ──────────────────── */}
-                    <section className="settings-section">
-                        <h3 className="section-label">Dictionary Translation</h3>
-                        <div className="toggle-group">
-                            <button
-                                className={`toggle-btn ${settings.dictionaryMode === 'word' ? 'active' : ''}`}
-                                onClick={() => updateSetting('dictionaryMode', 'word')}
-                            >
-                                Word Only
-                            </button>
-                            <button
-                                className={`toggle-btn ${settings.dictionaryMode === 'sentence' ? 'active' : ''}`}
-                                onClick={() => updateSetting('dictionaryMode', 'sentence')}
-                            >
-                                Full Sentence
                             </button>
                         </div>
                     </section>
@@ -286,20 +238,74 @@ export default function SettingsPanel({ onClose }) {
                                 style={{ display: 'none' }}
                                 onChange={handleBgUpload}
                             />
-                            {settings.readerBgImage && (
-                                <div className="slider-row">
-                                    <span className="slider-label">Opacity</span>
-                                    <input
-                                        type="range"
-                                        min="0.02"
-                                        max="0.3"
-                                        step="0.01"
-                                        value={settings.readerBgOpacity}
-                                        onChange={e => updateSetting('readerBgOpacity', Number(e.target.value))}
-                                    />
-                                    <span className="slider-value">{Math.round(settings.readerBgOpacity * 100)}%</span>
-                                </div>
-                            )}
+                        </div>
+                    </section>
+
+                    {/* ─── Text-to-Speech ──────────────────── */}
+                    <section className="settings-section">
+                        <h3 className="section-label">🔊 Text-to-Speech (System Voices)</h3>
+                        <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '8px' }}>
+                            Uses your device's voices. On iPad, download "Siri" or "Enhanced" voices in Accessibility settings for best quality.
+                        </p>
+                        <div className="tts-setting-row">
+                            <span className="slider-label">Narrator</span>
+                            <select
+                                className="tts-voice-select"
+                                value={settings.ttsNarratorVoice || ''}
+                                onChange={e => updateSetting('ttsNarratorVoice', e.target.value)}
+                            >
+                                <option value="">Default System Voice</option>
+                                {systemVoices.map(v => (
+                                    <option key={v.voiceURI} value={v.voiceURI}>{v.name} ({v.lang})</option>
+                                ))}
+                            </select>
+                        </div>
+                        <div className="tts-setting-row">
+                            <span className="slider-label">Male Voice</span>
+                            <select
+                                className="tts-voice-select"
+                                value={settings.ttsMaleVoice || ''}
+                                onChange={e => updateSetting('ttsMaleVoice', e.target.value)}
+                            >
+                                <option value="">Default System Voice</option>
+                                {systemVoices.map(v => (
+                                    <option key={v.voiceURI} value={v.voiceURI}>{v.name} ({v.lang})</option>
+                                ))}
+                            </select>
+                        </div>
+                        <div className="tts-setting-row">
+                            <span className="slider-label">Female Voice</span>
+                            <select
+                                className="tts-voice-select"
+                                value={settings.ttsFemaleVoice || ''}
+                                onChange={e => updateSetting('ttsFemaleVoice', e.target.value)}
+                            >
+                                <option value="">Default System Voice</option>
+                                {systemVoices.map(v => (
+                                    <option key={v.voiceURI} value={v.voiceURI}>{v.name} ({v.lang})</option>
+                                ))}
+                            </select>
+                        </div>
+                        <div className="slider-row">
+                            <span className="slider-label">Speed</span>
+                            <input
+                                type="range"
+                                min="0.5"
+                                max="2.0"
+                                step="0.25"
+                                value={settings.ttsSpeed || 1.0}
+                                onChange={e => updateSetting('ttsSpeed', Number(e.target.value))}
+                            />
+                            <span className="slider-value">{settings.ttsSpeed || 1.0}x</span>
+                        </div>
+                        <div className="tts-setting-row">
+                            <span className="slider-label">Auto-advance</span>
+                            <button
+                                className={`toggle-btn ${settings.ttsAutoAdvance ? 'active' : ''}`}
+                                onClick={() => updateSetting('ttsAutoAdvance', !settings.ttsAutoAdvance)}
+                            >
+                                {settings.ttsAutoAdvance ? 'ON' : 'OFF'}
+                            </button>
                         </div>
                     </section>
 
@@ -327,72 +333,8 @@ export default function SettingsPanel({ onClose }) {
                                     <span className="theme-name">{theme.name}</span>
                                 </button>
                             ))}
-                            {/* Custom theme button */}
-                            <button
-                                className={`theme-btn ${settings.theme === 'custom' ? 'active' : ''}`}
-                                onClick={() => {
-                                    const base = settings.customTheme || { ...THEMES.dark, id: 'custom', name: 'Custom' };
-                                    updateMultipleSettings({ theme: 'custom', customTheme: base });
-                                }}
-                            >
-                                <div
-                                    className="theme-preview custom-preview"
-                                    style={{
-                                        background: settings.customTheme?.bg || '#1a1a2e',
-                                        borderColor: settings.theme === 'custom' ? (settings.customTheme?.accent || '#7c5cfc') : 'transparent',
-                                    }}
-                                >
-                                    <span style={{ fontSize: '16px' }}>🎨</span>
-                                </div>
-                                <span className="theme-name">Custom</span>
-                            </button>
                         </div>
                     </section>
-
-                    {/* ─── Custom Theme Editor ─────────────── */}
-                    {settings.theme === 'custom' && (
-                        <section className="settings-section custom-theme-editor animate-fade-in-up">
-                            <h3 className="section-label">Custom Theme</h3>
-                            <div className="color-row">
-                                <span className="color-label">Background</span>
-                                <input
-                                    type="color"
-                                    value={settings.customTheme?.readerBg || '#1a1a2e'}
-                                    onChange={e => {
-                                        handleCustomThemeChange('bg', e.target.value);
-                                        handleCustomThemeChange('readerBg', e.target.value);
-                                    }}
-                                />
-                            </div>
-                            <div className="color-row">
-                                <span className="color-label">Text</span>
-                                <input
-                                    type="color"
-                                    value={settings.customTheme?.readerText || '#d4d4d4'}
-                                    onChange={e => {
-                                        handleCustomThemeChange('text', e.target.value);
-                                        handleCustomThemeChange('readerText', e.target.value);
-                                    }}
-                                />
-                            </div>
-                            <div className="color-row">
-                                <span className="color-label">Accent</span>
-                                <input
-                                    type="color"
-                                    value={settings.customTheme?.accent || '#7c5cfc'}
-                                    onChange={e => handleCustomThemeChange('accent', e.target.value)}
-                                />
-                            </div>
-                            <div className="color-row">
-                                <span className="color-label">Surface</span>
-                                <input
-                                    type="color"
-                                    value={settings.customTheme?.surface || '#16213e'}
-                                    onChange={e => handleCustomThemeChange('surface', e.target.value)}
-                                />
-                            </div>
-                        </section>
-                    )}
 
                     {/* ─── Preview ─────────────────────────── */}
                     <section className="settings-section">
@@ -406,25 +348,10 @@ export default function SettingsPanel({ onClose }) {
                                 textAlign: settings.textAlign,
                                 background: getTheme(settings.theme, settings.customTheme).readerBg,
                                 color: getTheme(settings.theme, settings.customTheme).readerText,
-                                padding: Math.min(settings.margins, 24) + 'px',
-                                position: 'relative',
-                                overflow: 'hidden',
+                                padding: '24px',
                             }}
                         >
-                            {settings.readerBgImage && (
-                                <div style={{
-                                    position: 'absolute',
-                                    inset: 0,
-                                    backgroundImage: `url(${settings.readerBgImage})`,
-                                    backgroundSize: 'cover',
-                                    backgroundPosition: 'center',
-                                    opacity: settings.readerBgOpacity,
-                                    pointerEvents: 'none',
-                                }} />
-                            )}
-                            <span style={{ position: 'relative', zIndex: 1 }}>
-                                The quick brown fox jumps over the lazy dog. Typography is the art and technique of arranging type to make written language legible, readable, and appealing.
-                            </span>
+                            The quick brown fox jumps over the lazy dog. Typography for your audiobook.
                         </div>
                     </section>
                 </div>

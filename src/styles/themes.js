@@ -103,6 +103,12 @@ export const DEFAULT_SETTINGS = {
     librarySortBy: 'lastReadAt', // 'title' | 'author' | 'lastReadAt'
     librarySortOrder: 'desc',
     dictionaryMode: 'word', // 'word' | 'sentence'
+    // TTS settings
+    ttsNarratorVoice: 'Google US English', // Common fallback
+    ttsMaleVoice: 'Daniel',
+    ttsFemaleVoice: 'Samantha',
+    ttsSpeed: 1.0,
+    ttsAutoAdvance: true,
 };
 
 export function applyTheme(theme) {
