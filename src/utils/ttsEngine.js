@@ -276,6 +276,60 @@ class SystemTTSEngine {
     }
 }
 
+// ─── WAV Helper ─────────────────────────────────────────
+
+function writeString(view, offset, string) {
+    for (let i = 0; i < string.length; i++) {
+        view.setUint8(offset + i, string.charCodeAt(i));
+    }
+}
+
+/**
+ * Convert a Float32Array of audio samples to a WAV Blob.
+ */
+function float32ToWavBlob(samples, sampleRate) {
+    const numSamples = samples.length;
+    const buffer = new ArrayBuffer(44 + numSamples * 2);
+    const view = new DataView(buffer);
+
+    // RIFF header
+    writeString(view, 0, 'RIFF');
+    view.setUint32(4, 36 + numSamples * 2, true);
+    writeString(view, 8, 'WAVE');
+
+    // fmt chunk
+    writeString(view, 12, 'fmt ');
+    view.setUint32(16, 16, true);       // chunk size
+    view.setUint16(20, 1, true);        // PCM format
+    view.setUint16(22, 1, true);        // mono
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true); // byte rate
+    view.setUint16(32, 2, true);        // block align
+    view.setUint16(34, 16, true);       // bits per sample
+
+    // data chunk
+    writeString(view, 36, 'data');
+    view.setUint32(40, numSamples * 2, true);
+
+    // Float32 → Int16 conversion
+    for (let i = 0; i < numSamples; i++) {
+        const s = Math.max(-1, Math.min(1, samples[i]));
+        view.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+    }
+
+    return new Blob([buffer], { type: 'audio/wav' });
+}
+
+/**
+ * Create a tiny silent WAV blob (100ms) — used to "unlock" Audio on iOS.
+ */
+export function createSilentWavBlob() {
+    const sampleRate = 24000;
+    const numSamples = Math.floor(sampleRate * 0.1); // 100ms
+    const samples = new Float32Array(numSamples); // all zeros = silence
+    return float32ToWavBlob(samples, sampleRate);
+}
+
 // ─── Kokoro TTS Engine (ONNX WebAssembly) ───────────────
 
 class KokoroTTSEngine {
@@ -283,14 +337,22 @@ class KokoroTTSEngine {
         this._kokoro = null;
         this._ready = false;
         this._loading = false;
-        this._audioContext = null;
-        this._currentSource = null;
+        this._audioElement = null;  // HTML Audio element (unlocked on user gesture)
+        this._currentBlobUrl = null;
         this.onBoundary = null;
         this.onEnd = null;
         this.onError = null;
         this._stopped = false;
         this._paused = false;
-        this._pauseResolve = null;
+        this._endResolve = null;
+    }
+
+    /**
+     * Set a pre-warmed Audio element (must be created + played on user gesture).
+     */
+    setAudioElement(el) {
+        this._audioElement = el;
+        console.log('[Kokoro] Audio element set (pre-warmed)');
     }
 
     async init() {
@@ -349,50 +411,80 @@ class KokoroTTSEngine {
                 voice: voiceId || 'af_heart',
                 speed: rate,
             });
-            console.log('[Kokoro] Audio generated, playing...');
 
             if (this._stopped) return;
 
+            const samples = audio.audio;
+            const sampleRate = audio.sampling_rate || 24000;
+            console.log(`[Kokoro] Audio generated — ${samples.length} samples, ${sampleRate}Hz, duration: ${(samples.length / sampleRate).toFixed(2)}s`);
+
+            if (!samples || samples.length === 0) {
+                console.warn('[Kokoro] Empty audio buffer, skipping');
+                return;
+            }
+
+            // Convert to WAV blob
+            const wavBlob = float32ToWavBlob(samples, sampleRate);
+            const blobUrl = URL.createObjectURL(wavBlob);
+
+            // Clean up previous blob URL
+            if (this._currentBlobUrl) {
+                URL.revokeObjectURL(this._currentBlobUrl);
+            }
+            this._currentBlobUrl = blobUrl;
+
+            // Ensure we have an audio element
+            if (!this._audioElement) {
+                console.warn('[Kokoro] No pre-warmed audio element, creating one (may not play on iOS)');
+                this._audioElement = new Audio();
+            }
+
+            const el = this._audioElement;
+            el.src = blobUrl;
+            el.playbackRate = 1.0; // Rate is already baked into the Kokoro output
+
             // Wait if paused
             if (this._paused) {
-                await new Promise(resolve => { this._pauseResolve = resolve; });
+                await new Promise(resolve => { this._endResolve = resolve; });
                 if (this._stopped) return;
             }
 
-            // Play via AudioContext
-            if (!this._audioContext) {
-                this._audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            }
-
-            // Ensure audio context is running
-            if (this._audioContext.state === 'suspended') {
-                await this._audioContext.resume();
-            }
-
-            // Convert to AudioBuffer
-            const samples = audio.audio;
-            const sampleRate = audio.sampling_rate || 24000;
-            const audioBuffer = this._audioContext.createBuffer(1, samples.length, sampleRate);
-            audioBuffer.getChannelData(0).set(samples);
-
             return new Promise((resolve, reject) => {
-                const source = this._audioContext.createBufferSource();
-                source.buffer = audioBuffer;
-                source.connect(this._audioContext.destination);
-
-                this._currentSource = source;
-
-                source.onended = () => {
-                    this._currentSource = null;
+                const onEnded = () => {
+                    cleanup();
                     if (this.onEnd && !this._stopped) this.onEnd();
                     resolve();
                 };
 
-                source.start(0);
+                const onError = (e) => {
+                    cleanup();
+                    console.error('[Kokoro] Audio playback error:', e);
+                    if (this.onError && !this._stopped) this.onError(e);
+                    reject(new Error('Audio playback failed'));
+                };
+
+                const cleanup = () => {
+                    el.removeEventListener('ended', onEnded);
+                    el.removeEventListener('error', onError);
+                };
+
+                el.addEventListener('ended', onEnded, { once: true });
+                el.addEventListener('error', onError, { once: true });
+
+                console.log('[Kokoro] Playing audio...');
+                const playPromise = el.play();
+                if (playPromise) {
+                    playPromise.catch(err => {
+                        console.error('[Kokoro] play() rejected:', err);
+                        cleanup();
+                        reject(err);
+                    });
+                }
             });
 
         } catch (err) {
             if (this._stopped) return;
+            console.error('[Kokoro] speak error:', err);
             if (this.onError) this.onError(err);
             throw err;
         }
@@ -400,37 +492,37 @@ class KokoroTTSEngine {
 
     pause() {
         this._paused = true;
-        if (this._audioContext && this._audioContext.state === 'running') {
-            this._audioContext.suspend();
+        if (this._audioElement && !this._audioElement.paused) {
+            this._audioElement.pause();
         }
     }
 
     resume() {
         this._paused = false;
-        if (this._pauseResolve) {
-            this._pauseResolve();
-            this._pauseResolve = null;
+        if (this._endResolve) {
+            this._endResolve();
+            this._endResolve = null;
         }
-        if (this._audioContext && this._audioContext.state === 'suspended') {
-            this._audioContext.resume();
+        if (this._audioElement && this._audioElement.paused && this._audioElement.src) {
+            this._audioElement.play().catch(() => {});
         }
     }
 
     stop() {
         this._stopped = true;
         this._paused = false;
-        if (this._pauseResolve) {
-            this._pauseResolve();
-            this._pauseResolve = null;
+        if (this._endResolve) {
+            this._endResolve();
+            this._endResolve = null;
         }
-        if (this._currentSource) {
-            try { this._currentSource.stop(); } catch (_) { }
-            this._currentSource = null;
+        if (this._audioElement) {
+            this._audioElement.pause();
+            this._audioElement.currentTime = 0;
         }
     }
 
     get speaking() {
-        return this._currentSource !== null && !this._paused;
+        return this._audioElement ? !this._audioElement.paused : false;
     }
 
     get paused() {
@@ -439,9 +531,14 @@ class KokoroTTSEngine {
 
     destroy() {
         this.stop();
-        if (this._audioContext) {
-            this._audioContext.close().catch(() => { });
-            this._audioContext = null;
+        if (this._currentBlobUrl) {
+            URL.revokeObjectURL(this._currentBlobUrl);
+            this._currentBlobUrl = null;
+        }
+        if (this._audioElement) {
+            this._audioElement.pause();
+            this._audioElement.removeAttribute('src');
+            this._audioElement = null;
         }
         this._kokoro = null;
         this._ready = false;

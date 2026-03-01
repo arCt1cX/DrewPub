@@ -12,7 +12,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { extractChapterText, createTtsSegments } from '../utils/ttsTextExtractor';
 import { parseDialogue, assignVoicesToCharacters } from '../utils/dialogueParser';
-import { createTTSEngine, VOICE_PRESETS } from '../utils/ttsEngine';
+import { createTTSEngine, VOICE_PRESETS, createSilentWavBlob } from '../utils/ttsEngine';
 import { saveDialogueAnalysis, getDialogueAnalysis } from '../db';
 
 /**
@@ -337,12 +337,14 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
 
     // ── Public API ──────────────────────────────────────────
 
+    const audioElRef = useRef(null);
+
     const startTts = useCallback(async () => {
         setTtsLoading(true);
 
         try {
-            // Warm up SpeechSynthesis on user gesture (Chrome/Safari requirement)
-            // Must happen synchronously within the click handler
+            // ── Warm up audio on user gesture (MUST be synchronous) ──
+            // SpeechSynthesis warm-up
             if (window.speechSynthesis) {
                 const warmUp = new SpeechSynthesisUtterance('');
                 warmUp.volume = 0;
@@ -351,9 +353,26 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
                 console.log('[TTS] SpeechSynthesis warmed up on user gesture');
             }
 
+            // HTML Audio element warm-up for Kokoro (iOS requires play() in gesture)
+            const engineType = settingsRef.current.ttsEngine || 'system';
+            if (engineType === 'kokoro') {
+                if (!audioElRef.current) {
+                    const el = new Audio();
+                    el.volume = 1.0;
+                    const silentBlob = createSilentWavBlob();
+                    el.src = URL.createObjectURL(silentBlob);
+                    try {
+                        await el.play();
+                        console.log('[TTS] Audio element unlocked on user gesture');
+                    } catch (e) {
+                        console.warn('[TTS] Audio element warm-up failed:', e);
+                    }
+                    audioElRef.current = el;
+                }
+            }
+
             // Initialize engine if needed
             if (!engineRef.current || !engineRef.current.isReady) {
-                const engineType = settingsRef.current.ttsEngine || 'system';
                 if (engineType === 'kokoro') {
                     setKokoroLoading(true);
                 }
@@ -363,6 +382,11 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
                     console.error('TTS engine failed to initialize');
                     setTtsLoading(false);
                     return;
+                }
+
+                // Pass the pre-warmed audio element to Kokoro engine
+                if (engineType === 'kokoro' && audioElRef.current && engineRef.current?.setAudioElement) {
+                    engineRef.current.setAudioElement(audioElRef.current);
                 }
             }
 
@@ -551,6 +575,11 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
             if (engineRef.current) {
                 engineRef.current.destroy();
                 engineRef.current = null;
+            }
+            if (audioElRef.current) {
+                audioElRef.current.pause();
+                audioElRef.current.removeAttribute('src');
+                audioElRef.current = null;
             }
         };
     }, []);
