@@ -4,16 +4,6 @@ import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig({
   base: '/',
-  build: {
-    rollupOptions: {
-      output: {
-        manualChunks: {
-          // Keep kokoro-js in its own lazy-loaded chunk
-          'kokoro': ['kokoro-js'],
-        }
-      }
-    }
-  },
   plugins: [
     react(),
     VitePWA({
@@ -45,8 +35,6 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
-        // Exclude large TTS model chunks from precaching
-        globIgnores: ['**/kokoro*', '**/*.wasm'],
         maximumFileSizeToCacheInBytes: 5 * 1024 * 1024, // 5MB
         runtimeCaching: [
           {
@@ -74,28 +62,14 @@ export default defineConfig({
             }
           },
           {
-            // Cache Kokoro TTS ONNX model files from Hugging Face
-            urlPattern: /^https:\/\/huggingface\.co\/.*Kokoro.*/i,
-            handler: 'CacheFirst',
+            // Cache TTS audio responses
+            urlPattern: /\/api\/tts/i,
+            handler: 'NetworkFirst',
             options: {
-              cacheName: 'kokoro-model-cache',
+              cacheName: 'tts-audio-cache',
               expiration: {
-                maxEntries: 20,
-                maxAgeSeconds: 60 * 60 * 24 * 365
-              },
-              cacheableResponse: { statuses: [0, 200] },
-              matchOptions: { ignoreSearch: true },
-            }
-          },
-          {
-            // Cache ONNX runtime WASM files
-            urlPattern: /\.wasm$/i,
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'wasm-cache',
-              expiration: {
-                maxEntries: 10,
-                maxAgeSeconds: 60 * 60 * 24 * 365
+                maxEntries: 200,
+                maxAgeSeconds: 60 * 60 * 24 * 7 // 1 week
               },
               cacheableResponse: { statuses: [0, 200] }
             }

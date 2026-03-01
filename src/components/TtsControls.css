@@ -1,0 +1,170 @@
+/* ── TTS Controls Bar ───────────────────────────────── */
+
+.tts-controls {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 1100;
+    padding: 0 16px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    animation: tts-slide-up 0.3s ease-out;
+    border-top: 1px solid var(--border);
+    /* Safe area for notched phones */
+    padding-bottom: max(16px, env(safe-area-inset-bottom));
+}
+
+@keyframes tts-slide-up {
+    from {
+        transform: translateY(100%);
+        opacity: 0;
+    }
+    to {
+        transform: translateY(0);
+        opacity: 1;
+    }
+}
+
+/* ── Progress bar ── */
+
+.tts-progress-bar {
+    height: 3px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-top: 8px;
+}
+
+.tts-progress-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 2px;
+    transition: width 0.3s ease;
+}
+
+/* ── Info row ── */
+
+.tts-info {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    padding: 0 4px;
+}
+
+.tts-speaker {
+    font-weight: 600;
+    color: var(--text);
+    max-width: 60%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.tts-segment-count {
+    font-variant-numeric: tabular-nums;
+}
+
+/* ── Buttons row ── */
+
+.tts-buttons {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+}
+
+.tts-btn {
+    background: transparent;
+    border: none;
+    color: var(--text);
+    font-size: 1.2rem;
+    width: 36px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    cursor: pointer;
+    transition: background 0.2s, transform 0.1s;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.tts-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.tts-btn:active {
+    transform: scale(0.9);
+}
+
+.tts-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+.tts-btn-main {
+    width: 44px;
+    height: 44px;
+    font-size: 1.4rem;
+    background: var(--accent);
+    color: white;
+    border-radius: 50%;
+}
+
+.tts-btn-main:hover {
+    background: var(--accent);
+    filter: brightness(1.15);
+}
+
+.tts-btn-stop {
+    color: var(--text-secondary);
+}
+
+/* ── Speed control ── */
+
+.tts-speed {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: 8px;
+}
+
+.tts-speed-slider {
+    width: 60px;
+    height: 3px;
+    -webkit-appearance: none;
+    appearance: none;
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 2px;
+    outline: none;
+}
+
+.tts-speed-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--accent);
+    cursor: pointer;
+}
+
+.tts-speed-slider::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--accent);
+    cursor: pointer;
+    border: none;
+}
+
+.tts-speed-label {
+    font-size: 0.65rem;
+    color: var(--text-secondary);
+    min-width: 28px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+}

@@ -8,6 +8,8 @@ import ReaderControls from '../components/ReaderControls';
 import SettingsPanel from '../components/SettingsPanel';
 import TableOfContents from '../components/TableOfContents';
 import DictionaryPopup from '../components/DictionaryPopup';
+import TtsControls from '../components/TtsControls';
+import useTts from '../hooks/useTts';
 import './Reader.css';
 
 export default function Reader() {
@@ -44,7 +46,8 @@ export default function Reader() {
     const showTocRef = useRef(false);
     const settingsRef = useRef(settings);
 
-
+    // TTS hook
+    const tts = useTts({ renditionRef, viewerRef, settings, bookId });
 
     useEffect(() => { showControlsRef.current = showControls; }, [showControls]);
     useEffect(() => { showSettingsRef.current = showSettings; }, [showSettings]);
@@ -703,6 +706,14 @@ export default function Reader() {
                     onBack={handleGoBack}
                     onToggleToc={() => { setShowToc(!showToc); setShowSettings(false); }}
                     onToggleSettings={() => { setShowSettings(!showSettings); setShowToc(false); }}
+                    onToggleTts={() => {
+                        if (tts.ttsActive) {
+                            tts.stopTts();
+                        } else {
+                            tts.startTts();
+                        }
+                    }}
+                    ttsActive={tts.ttsActive}
                     onPrev={() => renditionRef.current?.prev()}
                     onNext={() => renditionRef.current?.next()}
                 />
@@ -747,6 +758,29 @@ export default function Reader() {
                     loading={dictLoading}
                     position={dictPosition}
                     onClose={closeDictionary}
+                />
+            )}
+
+            {/* TTS Controls */}
+            {tts.ttsActive && (
+                <TtsControls
+                    visible={tts.ttsActive}
+                    playing={tts.ttsPlaying}
+                    paused={tts.ttsPaused}
+                    loading={tts.ttsLoading}
+                    currentSpeaker={tts.currentSpeaker}
+                    currentSegmentIndex={tts.currentSegmentIndex}
+                    totalSegments={tts.totalSegments}
+                    onPlayPause={() => {
+                        if (tts.ttsPlaying) tts.pauseTts();
+                        else if (tts.ttsPaused) tts.resumeTts();
+                        else tts.startTts();
+                    }}
+                    onStop={tts.stopTts}
+                    onNext={tts.nextSegment}
+                    onPrev={tts.prevSegment}
+                    rate={settings.ttsRate || 1.0}
+                    onRateChange={(r) => updateSetting('ttsRate', r)}
                 />
             )}
 
