@@ -1,77 +1,32 @@
 /**
  * Edge TTS Proxy — Cloudflare Pages Function
  *
- * Uses Microsoft Edge's Read Aloud TTS service (free, neural voices).
- * Accepts text + voice parameters, returns MP3 audio.
+ * Proxies text-to-speech requests to Microsoft Edge's Read Aloud service.
+ * The browser can't connect directly to speech.platform.bing.com (CORS),
+ * so this function handles the WebSocket connection server-side.
+ *
+ * POST /api/tts  { text, voice, rate, pitch }  →  audio/mpeg
  */
 
 const TRUSTED_TOKEN = '6A5AA1D4EAFF4E9FB37E23D68491D6F4';
+const EDGE_WSS = 'wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1';
 
 function escapeXml(text) {
     return text
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&apos;');
+        .replace(/"/g, '&quot;');
 }
 
-function makeTimestamp() {
-    return new Date().toISOString();
-}
-
-function makeConfigMessage(outputFormat) {
-    const ts = makeTimestamp();
-    return [
-        `X-Timestamp:${ts}`,
-        'Content-Type:application/json; charset=utf-8',
-        'Path:speech.config',
-        '',
-        JSON.stringify({
-            context: {
-                synthesis: {
-                    audio: {
-                        metadataoptions: {
-                            sentenceBoundaryEnabled: 'false',
-                            wordBoundaryEnabled: 'true',
-                        },
-                        outputFormat: outputFormat,
-                    },
-                },
-            },
-        }),
-    ].join('\r\n');
-}
-
-function makeSsmlMessage(requestId, text, voice, rate, pitch) {
-    const ts = makeTimestamp();
-    const rateStr = rate >= 0 ? `+${rate}%` : `${rate}%`;
-    const pitchStr = pitch >= 0 ? `+${pitch}Hz` : `${pitch}Hz`;
-
-    const ssml = `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'>` +
-        `<voice name='${voice}'>` +
-        `<prosody pitch='${pitchStr}' rate='${rateStr}' volume='+0%'>` +
-        `${escapeXml(text)}` +
-        `</prosody></voice></speak>`;
-
-    return [
-        `X-RequestId:${requestId}`,
-        'Content-Type:application/ssml+xml',
-        `X-Timestamp:${ts}`,
-        'Path:ssml',
-        '',
-        ssml,
-    ].join('\r\n');
-}
-
-const CORS_HEADERS = {
+const CORS = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
 };
 
 export async function onRequestOptions() {
-    return new Response(null, { headers: CORS_HEADERS });
+    return new Response(null, { headers: CORS });
 }
 
 export async function onRequestPost(context) {
@@ -81,130 +36,160 @@ export async function onRequestPost(context) {
         const voice = body.voice || 'en-US-JennyNeural';
         const rate = typeof body.rate === 'number' ? body.rate : 0;
         const pitch = typeof body.pitch === 'number' ? body.pitch : 0;
-        const outputFormat = 'audio-24khz-48kbitrate-mono-mp3';
 
         if (!text) {
-            return new Response(JSON.stringify({ error: 'No text provided' }), {
-                status: 400,
-                headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+            return new Response(JSON.stringify({ error: 'No text' }), {
+                status: 400, headers: { ...CORS, 'Content-Type': 'application/json' },
             });
         }
-
-        // Limit text length to prevent abuse
         if (text.length > 5000) {
-            return new Response(JSON.stringify({ error: 'Text too long (max 5000 chars)' }), {
-                status: 400,
-                headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+            return new Response(JSON.stringify({ error: 'Text too long' }), {
+                status: 400, headers: { ...CORS, 'Content-Type': 'application/json' },
             });
         }
 
-        const connectionId = crypto.randomUUID().replace(/-/g, '');
-        const requestId = crypto.randomUUID().replace(/-/g, '');
+        const connId = crypto.randomUUID().replace(/-/g, '');
+        const reqId = crypto.randomUUID().replace(/-/g, '');
+        const outputFormat = 'audio-24khz-48kbitrate-mono-mp3';
+        const ts = new Date().toISOString();
 
-        // Connect to Edge TTS via WebSocket
-        // CF Workers use https:// with Upgrade header (not wss://)
-        const wsUrl = `https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=${TRUSTED_TOKEN}&ConnectionId=${connectionId}`;
+        const rateStr = rate >= 0 ? `+${rate}%` : `${rate}%`;
+        const pitchStr = pitch >= 0 ? `+${pitch}Hz` : `${pitch}Hz`;
 
-        const wsResponse = await fetch(wsUrl, {
+        const configMsg = [
+            `X-Timestamp:${ts}`,
+            'Content-Type:application/json; charset=utf-8',
+            'Path:speech.config',
+            '',
+            JSON.stringify({
+                context: {
+                    synthesis: {
+                        audio: {
+                            metadataoptions: {
+                                sentenceBoundaryEnabled: 'false',
+                                wordBoundaryEnabled: 'true',
+                            },
+                            outputFormat,
+                        },
+                    },
+                },
+            }),
+        ].join('\r\n');
+
+        const ssml = `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'>` +
+            `<voice name='${voice}'>` +
+            `<prosody pitch='${pitchStr}' rate='${rateStr}' volume='+0%'>` +
+            `${escapeXml(text)}` +
+            `</prosody></voice></speak>`;
+
+        const ssmlMsg = [
+            `X-RequestId:${reqId}`,
+            'Content-Type:application/ssml+xml',
+            `X-Timestamp:${ts}`,
+            'Path:ssml',
+            '',
+            ssml,
+        ].join('\r\n');
+
+        // --- Connect via Cloudflare's fetch-based WebSocket ---
+        const wsUrl = `${EDGE_WSS}?TrustedClientToken=${TRUSTED_TOKEN}&ConnectionId=${connId}`;
+
+        const upgradeResp = await fetch(wsUrl, {
             headers: {
-                'Upgrade': 'websocket',
-                'Origin': 'chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0',
+                Upgrade: 'websocket',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             },
         });
 
-        const ws = wsResponse.webSocket;
+        const ws = upgradeResp.webSocket;
         if (!ws) {
-            return new Response(JSON.stringify({ error: 'WebSocket connection failed' }), {
-                status: 502,
-                headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-            });
+            // Fallback: try a second approach — direct fetching from a REST TTS endpoint
+            return new Response(
+                JSON.stringify({ error: 'WebSocket upgrade failed. Falling back not available.' }),
+                { status: 502, headers: { ...CORS, 'Content-Type': 'application/json' } }
+            );
         }
 
         ws.accept();
 
-        // Collect audio chunks via the WebSocket
-        const audioData = await new Promise((resolve, reject) => {
-            const audioChunks = [];
+        // Collect audio
+        const audioChunks = [];
+        let done = false;
 
-            const timeout = setTimeout(() => {
-                try { ws.close(); } catch (_) {}
-                reject(new Error('Synthesis timeout (30s)'));
+        const audioPromise = new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+                if (!done) {
+                    done = true;
+                    try { ws.close(); } catch (_) {}
+                    if (audioChunks.length > 0) resolve(); else reject(new Error('timeout'));
+                }
             }, 30000);
 
-            ws.addEventListener('message', (event) => {
-                if (typeof event.data === 'string') {
-                    // Text message — check for turn.end
-                    if (event.data.includes('Path:turn.end')) {
-                        clearTimeout(timeout);
+            ws.addEventListener('message', (evt) => {
+                if (done) return;
+
+                if (typeof evt.data === 'string') {
+                    if (evt.data.includes('Path:turn.end')) {
+                        done = true;
+                        clearTimeout(timer);
                         try { ws.close(); } catch (_) {}
-                        // Concatenate all audio chunks
-                        const total = audioChunks.reduce((s, c) => s + c.byteLength, 0);
-                        const result = new Uint8Array(total);
-                        let offset = 0;
-                        for (const chunk of audioChunks) {
-                            result.set(new Uint8Array(chunk), offset);
-                            offset += chunk.byteLength;
-                        }
-                        resolve(result.buffer);
+                        resolve();
                     }
-                } else {
-                    // Binary message — extract audio after header
-                    const data = event.data; // ArrayBuffer
-                    if (data.byteLength < 2) return;
+                } else if (evt.data instanceof ArrayBuffer) {
+                    const buf = evt.data;
+                    if (buf.byteLength < 2) return;
+                    const headerLen = new DataView(buf).getUint16(0);
+                    const headerEnd = 2 + headerLen;
+                    if (headerEnd >= buf.byteLength) return;
 
-                    const view = new DataView(data);
-                    const headerLen = view.getUint16(0);
-                    if (2 + headerLen >= data.byteLength) return;
-
-                    const headerText = new TextDecoder('ascii').decode(
-                        data.slice(2, 2 + headerLen)
-                    );
-
-                    if (headerText.includes('Path:audio')) {
-                        audioChunks.push(data.slice(2 + headerLen));
+                    const hdrText = new TextDecoder('ascii').decode(buf.slice(2, headerEnd));
+                    if (hdrText.includes('Path:audio')) {
+                        audioChunks.push(buf.slice(headerEnd));
                     }
                 }
-            });
-
-            ws.addEventListener('error', () => {
-                clearTimeout(timeout);
-                reject(new Error('WebSocket error'));
             });
 
             ws.addEventListener('close', () => {
-                clearTimeout(timeout);
-                // If we haven't resolved yet, try to return what we have
-                if (audioChunks.length > 0) {
-                    const total = audioChunks.reduce((s, c) => s + c.byteLength, 0);
-                    const result = new Uint8Array(total);
-                    let offset = 0;
-                    for (const chunk of audioChunks) {
-                        result.set(new Uint8Array(chunk), offset);
-                        offset += chunk.byteLength;
-                    }
-                    resolve(result.buffer);
-                } else {
-                    reject(new Error('Connection closed without audio'));
-                }
+                if (!done) { done = true; clearTimeout(timer); resolve(); }
             });
 
-            // Send config message, then SSML
-            ws.send(makeConfigMessage(outputFormat));
-            ws.send(makeSsmlMessage(requestId, text, voice, rate, pitch));
+            ws.addEventListener('error', (e) => {
+                if (!done) { done = true; clearTimeout(timer); reject(new Error('ws error')); }
+            });
         });
 
-        return new Response(audioData, {
+        // Send messages
+        ws.send(configMsg);
+        ws.send(ssmlMsg);
+
+        await audioPromise;
+
+        if (audioChunks.length === 0) {
+            return new Response(JSON.stringify({ error: 'No audio generated' }), {
+                status: 500, headers: { ...CORS, 'Content-Type': 'application/json' },
+            });
+        }
+
+        // Concatenate
+        const totalLen = audioChunks.reduce((s, c) => s + c.byteLength, 0);
+        const result = new Uint8Array(totalLen);
+        let offset = 0;
+        for (const chunk of audioChunks) {
+            result.set(new Uint8Array(chunk), offset);
+            offset += chunk.byteLength;
+        }
+
+        return new Response(result.buffer, {
             headers: {
-                ...CORS_HEADERS,
+                ...CORS,
                 'Content-Type': 'audio/mpeg',
                 'Cache-Control': 'public, max-age=86400',
             },
         });
+
     } catch (err) {
-        return new Response(JSON.stringify({ error: err.message }), {
-            status: 500,
-            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        return new Response(JSON.stringify({ error: err.message || 'Internal error' }), {
+            status: 500, headers: { ...CORS, 'Content-Type': 'application/json' },
         });
     }
 }
