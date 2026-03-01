@@ -1,363 +1,627 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
-import { getTtsEngine, VoiceAssigner, stopAllEngines } from '../utils/tts';
-import { analyzeChapter } from '../utils/dialogueAnalyzer';
+/**
+ * useTts — React hook that orchestrates TTS playback in the EPUB reader.
+ *
+ * Responsibilities:
+ * - Extract text from current chapter (via iframe DOM)
+ * - Parse dialogue / identify speakers
+ * - Manage the TTS engine lifecycle
+ * - Highlight current sentence in the iframe
+ * - Auto-advance pages/chapters when TTS reaches the end
+ */
+
+import { useState, useCallback, useRef, useEffect } from 'react';
+import { extractChapterText, createTtsSegments } from '../utils/ttsTextExtractor';
+import { parseDialogue, assignVoicesToCharacters } from '../utils/dialogueParser';
+import { createTTSEngine, VOICE_PRESETS, createSilentWavBlob } from '../utils/ttsEngine';
+import { saveDialogueAnalysis, getDialogueAnalysis } from '../db';
 
 /**
- * useTts — React hook for Text-to-Speech playback in the ePub reader.
- *
- * Handles:
- * - Text extraction from epubjs iframe
- * - Dialogue analysis & character voice assignment
- * - Audio playback with segment cycling
- * - Sentence highlighting in the iframe
- * - Auto-advance pages when TTS reaches non-visible content
- * - Prefetch next segments for gapless playback
+ * @param {Object} params
+ * @param {React.RefObject} params.renditionRef — epub.js rendition
+ * @param {React.RefObject} params.viewerRef — viewer container div
+ * @param {Object} params.settings — current settings
+ * @param {string} params.bookId — current book ID
  */
 export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
-    // ── State ────────────────────────────────────────────
     const [ttsActive, setTtsActive] = useState(false);
     const [ttsPlaying, setTtsPlaying] = useState(false);
     const [ttsPaused, setTtsPaused] = useState(false);
     const [ttsLoading, setTtsLoading] = useState(false);
-    const [currentSpeaker, setCurrentSpeaker] = useState('Narrator');
-    const [currentSegmentIndex, setCurrentSegmentIndex] = useState(0);
+    const [currentSegmentIndex, setCurrentSegmentIndex] = useState(-1);
+    const [currentSpeaker, setCurrentSpeaker] = useState(null);
     const [totalSegments, setTotalSegments] = useState(0);
+    const [engineReady, setEngineReady] = useState(false);
+    const [kokoroLoading, setKokoroLoading] = useState(false);
 
-    // ── Refs ─────────────────────────────────────────────
-    const segmentsRef = useRef([]);
-    const currentIndexRef = useRef(0);
-    const voiceAssignerRef = useRef(null);
     const engineRef = useRef(null);
-    const abortRef = useRef(null);
+    const segmentsRef = useRef([]);
+    const voiceAssignmentRef = useRef({});
+    const parsedDataRef = useRef(null);
+    const stoppedRef = useRef(false);
     const activeRef = useRef(false);
-    const highlightedElRef = useRef(null);
     const settingsRef = useRef(settings);
 
     useEffect(() => { settingsRef.current = settings; }, [settings]);
 
-    // ── Helpers ──────────────────────────────────────────
+    // ── Initialize / change engine ──────────────────────────
+    const initEngine = useCallback(async (engineType) => {
+        if (engineRef.current) {
+            engineRef.current.destroy();
+        }
 
-    /** Get the iframe document from the epub viewer */
+        const engine = createTTSEngine(engineType);
+        const success = await engine.init();
+
+        if (success) {
+            engineRef.current = engine;
+            setEngineReady(true);
+            return true;
+        }
+
+        // Fallback to system engine
+        if (engineType !== 'system') {
+            const fallback = createTTSEngine('system');
+            await fallback.init();
+            engineRef.current = fallback;
+            setEngineReady(true);
+            return true;
+        }
+
+        setEngineReady(false);
+        return false;
+    }, []);
+
+    // ── Get iframe document ─────────────────────────────────
     const getIframeDoc = useCallback(() => {
-        const iframe = viewerRef.current?.querySelector('iframe');
+        const iframe = viewerRef.current?.querySelector('iframe')
+            || renditionRef.current?.manager?.container?.querySelector('iframe');
         if (!iframe) return null;
         try {
             return iframe.contentDocument || iframe.contentWindow?.document;
-        } catch (_) {
+        } catch {
             return null;
         }
-    }, [viewerRef]);
+    }, [viewerRef, renditionRef]);
 
-    /** Highlight a DOM element in the iframe */
-    const highlightElement = useCallback((element) => {
-        // Remove previous highlight
-        if (highlightedElRef.current) {
-            highlightedElRef.current.classList.remove('tts-highlight', 'tts-highlight-block');
-        }
-
-        if (element && settingsRef.current.ttsHighlight !== false) {
-            element.classList.add('tts-highlight-block');
-            highlightedElRef.current = element;
-
-            // Scroll element into view if needed (for both modes)
-            try {
-                element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            } catch (_) { }
-        } else {
-            highlightedElRef.current = null;
-        }
-    }, []);
-
-    /** Clear all highlights */
-    const clearHighlights = useCallback(() => {
-        if (highlightedElRef.current) {
-            highlightedElRef.current.classList.remove('tts-highlight', 'tts-highlight-block');
-            highlightedElRef.current = null;
-        }
-        // Also clear any stale highlights in iframe
+    // ── Highlight current segment ───────────────────────────
+    const highlightSegment = useCallback((segmentIndex) => {
         const doc = getIframeDoc();
-        if (doc) {
-            doc.querySelectorAll('.tts-highlight, .tts-highlight-block').forEach(el => {
-                el.classList.remove('tts-highlight', 'tts-highlight-block');
-            });
-        }
-    }, [getIframeDoc]);
+        if (!doc) return;
 
-    /** Analyze current chapter and build segments list */
-    const analyzeCurrentChapter = useCallback(() => {
-        const doc = getIframeDoc();
-        if (!doc) return { segments: [], characters: {} };
-
-        const engineType = settingsRef.current.ttsEngine || 'cloud';
-        const multiVoice = settingsRef.current.ttsMultiVoice !== false;
-        const result = analyzeChapter(doc, multiVoice);
-
-        // Set up voice assigner
-        voiceAssignerRef.current = new VoiceAssigner(engineType);
-
-        // Pre-assign voices to known characters
-        if (multiVoice && result.characters) {
-            for (const [name, info] of Object.entries(result.characters)) {
-                voiceAssignerRef.current.getVoice(name, info.gender);
+        // Remove existing highlights
+        const existing = doc.querySelectorAll('.tts-highlight');
+        existing.forEach(el => {
+            // Unwrap the highlight span
+            const parent = el.parentNode;
+            while (el.firstChild) {
+                parent.insertBefore(el.firstChild, el);
             }
-        }
+            parent.removeChild(el);
+            parent.normalize(); // Merge adjacent text nodes
+        });
 
-        return result;
-    }, [getIframeDoc]);
+        if (segmentIndex < 0 || segmentIndex >= segmentsRef.current.length) return;
+        if (!settingsRef.current.ttsHighlight) return;
 
-    /** Get the voice for a segment */
-    const getVoiceForSegment = useCallback((segment) => {
-        if (!voiceAssignerRef.current) return null;
-        if (!settingsRef.current.ttsMultiVoice || segment.type !== 'dialogue') {
-            return voiceAssignerRef.current.getVoice('Narrator', 'unknown');
-        }
-        return voiceAssignerRef.current.getVoice(segment.character, segment.gender);
-    }, []);
+        const segment = segmentsRef.current[segmentIndex];
+        if (!segment?.element) return;
 
-    // ── Playback ─────────────────────────────────────────
-
-    /** Play a single segment. Returns when segment finishes or is aborted. */
-    const playSegment = useCallback(async (index) => {
-        const segments = segmentsRef.current;
-        if (index < 0 || index >= segments.length) return false;
-
-        const segment = segments[index];
-        const engine = engineRef.current;
-        if (!engine || !activeRef.current) return false;
-
-        const s = settingsRef.current;
-        const voice = getVoiceForSegment(segment);
-
-        currentIndexRef.current = index;
-        setCurrentSegmentIndex(index);
-        setCurrentSpeaker(segment.character || 'Narrator');
-
-        // Highlight
-        highlightElement(segment.element);
+        // Find the text in the element and wrap it
+        const element = segment.element;
+        const searchText = segment.text.substring(0, 60); // Use first 60 chars for matching
 
         try {
-            setTtsPlaying(true);
-            setTtsPaused(false);
+            const walker = doc.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+            let node;
+            let found = false;
 
-            await engine.speak(segment.text, voice, {
-                rate: s.ttsRate || 1.0,
-                pitch: s.ttsPitch || 1.0,
-                signal: abortRef.current?.signal,
-            });
+            while ((node = walker.nextNode())) {
+                const nodeText = node.textContent;
+                const idx = nodeText.indexOf(searchText.substring(0, Math.min(30, searchText.length)));
 
-            return true; // Segment completed
-        } catch (err) {
-            if (err.name === 'AbortError') return false;
+                if (idx !== -1 && !found) {
+                    found = true;
+                    // Wrap the entire text node (simpler, more reliable)
+                    const span = doc.createElement('span');
+                    span.className = 'tts-highlight';
+                    node.parentNode.insertBefore(span, node);
+                    span.appendChild(node);
 
-            // If cloud engine fails, try system fallback
-            if (s.ttsEngine !== 'system') {
-                console.warn('Cloud TTS failed, trying system fallback:', err.message);
-                try {
-                    const fallback = getTtsEngine('system');
-                    await fallback.speak(segment.text, null, {
-                        rate: s.ttsRate || 1.0,
-                        pitch: s.ttsPitch || 1.0,
-                        signal: abortRef.current?.signal,
+                    // Scroll into view
+                    span.scrollIntoView({
+                        behavior: 'smooth',
+                        block: 'center',
                     });
-                    return true;
-                } catch (fallbackErr) {
-                    if (fallbackErr.name === 'AbortError') return false;
-                    console.error('Both TTS engines failed:', fallbackErr);
-                    return true; // Skip segment on failure
+                    break;
                 }
             }
-            return true; // Skip on error
+
+            // If text not found in individual nodes, highlight the whole element
+            if (!found && element !== doc.body) {
+                element.classList.add('tts-highlight-block');
+                element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+        } catch (err) {
+            console.warn('Highlight failed:', err);
         }
-    }, [getVoiceForSegment, highlightElement]);
+    }, [getIframeDoc]);
 
-    /** Main playback loop — plays segments sequentially */
-    const playbackLoop = useCallback(async (startIndex = 0) => {
-        const segments = segmentsRef.current;
-        let idx = startIndex;
+    // ── Remove all highlights ───────────────────────────────
+    const clearHighlights = useCallback(() => {
+        const doc = getIframeDoc();
+        if (!doc) return;
 
-        while (idx < segments.length && activeRef.current) {
-            const completed = await playSegment(idx);
-            if (!completed || !activeRef.current) break;
-            idx++;
+        const highlights = doc.querySelectorAll('.tts-highlight');
+        highlights.forEach(el => {
+            const parent = el.parentNode;
+            while (el.firstChild) {
+                parent.insertBefore(el.firstChild, el);
+            }
+            parent.removeChild(el);
+            parent.normalize();
+        });
+
+        const blocks = doc.querySelectorAll('.tts-highlight-block');
+        blocks.forEach(el => el.classList.remove('tts-highlight-block'));
+    }, [getIframeDoc]);
+
+    // ── Get voice for a segment ─────────────────────────────
+    const getVoiceForSegment = useCallback((segment) => {
+        const engineType = settingsRef.current.ttsEngine || 'system';
+        const presets = VOICE_PRESETS[engineType] || VOICE_PRESETS.system;
+        const assignment = voiceAssignmentRef.current;
+        const multiVoice = settingsRef.current.ttsMultiVoice;
+
+        if (!multiVoice || segment.segType === 'narration' || !segment.speaker) {
+            // Use narrator voice
+            const narratorPreset = presets.narrator;
+            if (engineType === 'kokoro') {
+                return settingsRef.current.ttsNarratorVoice || narratorPreset.id;
+            }
+            return settingsRef.current.ttsNarratorVoice || 'system-default';
         }
 
-        // Reached end of chapter
-        if (activeRef.current && idx >= segments.length) {
-            // Try auto-advance to next chapter
-            if (settingsRef.current.ttsAutoAdvance !== false) {
-                const advanced = await advanceChapter();
-                if (advanced) return; // New playback loop started
+        // Character voice
+        if (assignment[segment.speaker]) {
+            return assignment[segment.speaker];
+        }
+
+        // Auto-assign based on gender
+        if (segment.gender === 'female') {
+            const femalePresets = Object.values(presets).filter(p => p.gender === 'female');
+            if (femalePresets.length > 0) {
+                const voiceId = engineType === 'kokoro' ? femalePresets[0].id : 'system-female-0';
+                assignment[segment.speaker] = voiceId;
+                return voiceId;
+            }
+        } else if (segment.gender === 'male') {
+            const malePresets = Object.values(presets).filter(p => p.gender === 'male');
+            if (malePresets.length > 0) {
+                const voiceId = engineType === 'kokoro' ? malePresets[0].id : 'system-male-0';
+                assignment[segment.speaker] = voiceId;
+                return voiceId;
             }
         }
 
-        // Stop if we exited the loop
-        if (activeRef.current) {
-            doStop();
-        }
-    }, [playSegment]);
+        // Default
+        return engineType === 'kokoro' ? presets.narrator.id : 'system-default';
+    }, []);
 
-    /** Try to advance to next chapter and continue TTS */
-    const advanceChapter = useCallback(async () => {
-        const rendition = renditionRef.current;
-        if (!rendition) return false;
+    // ── Speak a single segment ──────────────────────────────
+    const speakSegment = useCallback(async (index) => {
+        if (stoppedRef.current || !activeRef.current) return false;
+
+        const engine = engineRef.current;
+        const segments = segmentsRef.current;
+
+        if (!engine || index >= segments.length || index < 0) return false;
+
+        const segment = segments[index];
+        setCurrentSegmentIndex(index);
+        setCurrentSpeaker(segment.speaker || 'Narrator');
+
+        // Highlight
+        highlightSegment(index);
+
+        const voiceId = getVoiceForSegment(segment);
+        const rate = settingsRef.current.ttsRate || 1.0;
+        const pitch = settingsRef.current.ttsPitch || 1.0;
 
         try {
-            await rendition.next();
-
-            // Wait for new content to render
-            await new Promise(resolve => setTimeout(resolve, 500));
-
-            // Re-analyze new chapter
-            const { segments } = analyzeCurrentChapter();
-            if (segments.length === 0) return false;
-
-            segmentsRef.current = segments;
-            setTotalSegments(segments.length);
-
-            // Start playing from beginning of new chapter
-            playbackLoop(0);
+            await engine.speak(segment.text, voiceId, rate, pitch);
             return true;
-        } catch (_) {
+        } catch (err) {
+            if (stoppedRef.current) return false;
+            console.warn('TTS speak failed:', err);
             return false;
         }
-    }, [renditionRef, analyzeCurrentChapter, playbackLoop]);
+    }, [highlightSegment, getVoiceForSegment]);
 
-    // ── Public Controls ──────────────────────────────────
+    // ── Playback loop ───────────────────────────────────────
+    const playFromIndex = useCallback(async (startIndex) => {
+        stoppedRef.current = false;
+        setTtsPlaying(true);
+        setTtsPaused(false);
 
-    const startTts = useCallback(async () => {
-        // Stop any existing playback
-        doStop();
+        let consecutiveFailures = 0;
+        const MAX_FAILURES = 3;
 
-        setTtsActive(true);
-        setTtsLoading(true);
-        activeRef.current = true;
+        for (let i = startIndex; i < segmentsRef.current.length; i++) {
+            if (stoppedRef.current || !activeRef.current) break;
 
-        // Create abort controller
-        abortRef.current = new AbortController();
+            // Prefetch next segment while current one plays (cloud engine)
+            if (i + 1 < segmentsRef.current.length && engineRef.current?.prefetch) {
+                const nextSeg = segmentsRef.current[i + 1];
+                const nextVoice = getVoiceForSegment(nextSeg);
+                const rate = settingsRef.current.ttsRate || 1.0;
+                const pitch = settingsRef.current.ttsPitch || 1.0;
+                engineRef.current.prefetch(nextSeg.text, nextVoice, rate, pitch);
+            }
 
-        // Get/create engine
-        const engineType = settingsRef.current.ttsEngine || 'cloud';
-        engineRef.current = getTtsEngine(engineType);
-
-        // Analyze chapter
-        const { segments } = analyzeCurrentChapter();
-        if (segments.length === 0) {
-            setTtsLoading(false);
-            setTtsActive(false);
-            activeRef.current = false;
-            return;
+            const success = await speakSegment(i);
+            if (!success && stoppedRef.current) break;
+            if (!success) {
+                consecutiveFailures++;
+                console.warn(`[TTS] Segment ${i} failed (${consecutiveFailures}/${MAX_FAILURES})`);
+                if (consecutiveFailures >= MAX_FAILURES) {
+                    console.error('[TTS] Too many consecutive failures, stopping playback');
+                    stoppedRef.current = true;
+                    break;
+                }
+                // Small delay before trying next segment
+                await new Promise(r => setTimeout(r, 200));
+                continue;
+            }
+            consecutiveFailures = 0; // Reset on success
         }
 
-        segmentsRef.current = segments;
-        setTotalSegments(segments.length);
-        setTtsLoading(false);
+        // If we reached the end of all segments without being stopped
+        if (!stoppedRef.current && activeRef.current && consecutiveFailures < MAX_FAILURES) {
+            // Check if we should auto-advance to next chapter
+            if (settingsRef.current.ttsAutoAdvance) {
+                const rendition = renditionRef.current;
+                if (rendition) {
+                    clearHighlights();
+                    console.log('[TTS] Auto-advancing to next chapter...');
 
-        // Start playback loop
-        playbackLoop(0);
-    }, [analyzeCurrentChapter, playbackLoop]);
+                    // Move to next chapter/page
+                    await rendition.next();
+
+                    // Wait for the new chapter to load
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+
+                    // Re-extract text from new chapter and continue
+                    const doc = getIframeDoc();
+                    if (doc && activeRef.current && !stoppedRef.current) {
+                        const blocks = extractChapterText(doc);
+                        if (blocks.length === 0) {
+                            console.warn('[TTS] New chapter has no text, stopping');
+                        } else {
+                            const rawSegments = createTtsSegments(blocks);
+                            const parsed = parseDialogue(rawSegments);
+
+                            segmentsRef.current = parsed.segments;
+                            parsedDataRef.current = parsed;
+                            setTotalSegments(parsed.segments.length);
+
+                            // Update voice assignments with new characters
+                            if (parsed.characters) {
+                                Object.assign(voiceAssignmentRef.current, buildVoiceAssignment(parsed.characters));
+                            }
+
+                            // Continue playing from start of new chapter
+                            playFromIndex(0);
+                            return;
+                        }
+                    }
+                }
+            }
+
+            // Done playing
+            setTtsPlaying(false);
+            setCurrentSegmentIndex(-1);
+            setCurrentSpeaker(null);
+            clearHighlights();
+        }
+    }, [speakSegment, renditionRef, getIframeDoc, clearHighlights]);
+
+    // ── Build voice assignment from characters ──────────────
+    const buildVoiceAssignment = useCallback((characters) => {
+        const engineType = settingsRef.current.ttsEngine || 'cloud';
+        const presets = VOICE_PRESETS[engineType] || VOICE_PRESETS.system;
+
+        const maleVoices = Object.entries(presets)
+            .filter(([_, v]) => v.gender === 'male')
+            .map(([key, v], i) => ({ id: v.id || `system-male-${i}`, ...v }));
+
+        const femaleVoices = Object.entries(presets)
+            .filter(([_, v]) => v.gender === 'female')
+            .map(([key, v], i) => ({ id: v.id || `system-female-${i}`, ...v }));
+
+        const narratorVoice = settingsRef.current.ttsNarratorVoice ||
+            (presets.narrator?.id || 'system-default');
+
+        return assignVoicesToCharacters(characters, [...maleVoices, ...femaleVoices], narratorVoice);
+    }, []);
+
+    // ── Public API ──────────────────────────────────────────
+
+    const audioElRef = useRef(null);
+
+    const startTts = useCallback(async () => {
+        setTtsLoading(true);
+
+        try {
+            // ── Warm up audio on user gesture (MUST be synchronous) ──
+            // SpeechSynthesis warm-up
+            if (window.speechSynthesis) {
+                const warmUp = new SpeechSynthesisUtterance('');
+                warmUp.volume = 0;
+                window.speechSynthesis.speak(warmUp);
+                window.speechSynthesis.cancel();
+                console.log('[TTS] SpeechSynthesis warmed up on user gesture');
+            }
+
+            // HTML Audio element warm-up for Cloud/Kokoro (iOS requires play() in gesture)
+            const engineType = settingsRef.current.ttsEngine || 'cloud';
+            if (engineType === 'cloud' || engineType === 'kokoro') {
+                if (!audioElRef.current) {
+                    const el = new Audio();
+                    el.volume = 1.0;
+                    const silentBlob = createSilentWavBlob();
+                    el.src = URL.createObjectURL(silentBlob);
+                    try {
+                        await el.play();
+                        console.log('[TTS] Audio element unlocked on user gesture');
+                    } catch (e) {
+                        console.warn('[TTS] Audio element warm-up failed:', e);
+                    }
+                    audioElRef.current = el;
+                }
+            }
+
+            // Initialize engine if needed
+            if (!engineRef.current || !engineRef.current.isReady) {
+                if (engineType === 'kokoro') {
+                    setKokoroLoading(true);
+                }
+                const ok = await initEngine(engineType);
+                setKokoroLoading(false);
+                if (!ok) {
+                    console.error('TTS engine failed to initialize');
+                    setTtsLoading(false);
+                    return;
+                }
+
+                // Pass the pre-warmed audio element to Cloud/Kokoro engine
+                if ((engineType === 'cloud' || engineType === 'kokoro') && audioElRef.current && engineRef.current?.setAudioElement) {
+                    engineRef.current.setAudioElement(audioElRef.current);
+                }
+            }
+
+            // Extract text from current chapter
+            const doc = getIframeDoc();
+            if (!doc) {
+                console.error('Cannot access iframe document');
+                setTtsLoading(false);
+                return;
+            }
+
+            const blocks = extractChapterText(doc);
+            if (blocks.length === 0) {
+                console.warn('No text found in chapter');
+                setTtsLoading(false);
+                return;
+            }
+
+            const rawSegments = createTtsSegments(blocks);
+            const parsed = parseDialogue(rawSegments);
+
+            // Try to enhance dialogue analysis with Workers AI (if characters have unknown gender)
+            const hasUnknowns = Object.values(parsed.characters).some(c => c.gender === 'unknown');
+            if (hasUnknowns && settingsRef.current.ttsMultiVoice) {
+                try {
+                    const chapterText = blocks.map(b => b.text).join('\n\n');
+                    const chapterHref = renditionRef.current?.location?.start?.href || '0';
+
+                    // Check cache first
+                    const cached = await getDialogueAnalysis(bookId, chapterHref);
+                    if (cached?.characters) {
+                        // Merge AI-resolved characters into local parse
+                        for (const [name, info] of Object.entries(cached.characters)) {
+                            if (parsed.characters[name] && info.gender !== 'unknown') {
+                                parsed.characters[name].gender = info.gender;
+                            }
+                        }
+                        // Update segment genders
+                        for (const seg of parsed.segments) {
+                            if (seg.speaker && parsed.characters[seg.speaker]) {
+                                seg.gender = parsed.characters[seg.speaker].gender;
+                            }
+                        }
+                    } else {
+                        // Call Workers AI endpoint (non-blocking, best-effort)
+                        const aiResponse = await Promise.race([
+                            fetch('/api/analyze-dialogue', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ text: chapterText.substring(0, 3000), bookId, chapterIndex: chapterHref }),
+                            }).then(r => r.json()),
+                            new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000)),
+                        ]);
+
+                        if (aiResponse?.characters && !aiResponse.fallback) {
+                            // Merge AI results into local parse
+                            for (const [name, info] of Object.entries(aiResponse.characters)) {
+                                if (parsed.characters[name] && info.gender !== 'unknown') {
+                                    parsed.characters[name].gender = info.gender;
+                                }
+                                // Also add new characters the AI found that regex missed
+                                if (!parsed.characters[name] && info.gender) {
+                                    parsed.characters[name] = info;
+                                }
+                            }
+                            // Update segment genders
+                            for (const seg of parsed.segments) {
+                                if (seg.speaker && parsed.characters[seg.speaker]) {
+                                    seg.gender = parsed.characters[seg.speaker].gender;
+                                }
+                            }
+                        }
+                    }
+                } catch (aiErr) {
+                    console.warn('Workers AI enhancement skipped:', aiErr.message);
+                    // Continue with regex-only results — this is fine
+                }
+            }
+
+            segmentsRef.current = parsed.segments;
+            parsedDataRef.current = parsed;
+            setTotalSegments(parsed.segments.length);
+
+            // Build voice assignments
+            if (parsed.characters && Object.keys(parsed.characters).length > 0) {
+                voiceAssignmentRef.current = buildVoiceAssignment(parsed.characters);
+
+                // Cache the analysis
+                try {
+                    const chapterHref = renditionRef.current?.location?.start?.href || '0';
+                    await saveDialogueAnalysis({
+                        id: `${bookId}-${chapterHref}`,
+                        bookId,
+                        chapterIndex: chapterHref,
+                        segments: parsed.segments.map(s => ({
+                            text: s.text.substring(0, 100),
+                            segType: s.segType,
+                            speaker: s.speaker,
+                            gender: s.gender,
+                        })),
+                        characters: parsed.characters,
+                    });
+                } catch { /* ignore cache errors */ }
+            }
+
+            setTtsActive(true);
+            activeRef.current = true;
+            setTtsLoading(false);
+
+            // Start playing from the beginning
+            playFromIndex(0);
+
+        } catch (err) {
+            console.error('TTS start failed:', err);
+            setTtsLoading(false);
+        }
+    }, [initEngine, getIframeDoc, buildVoiceAssignment, playFromIndex, bookId, renditionRef]);
+
+    const stopTts = useCallback(() => {
+        stoppedRef.current = true;
+        activeRef.current = false;
+        if (engineRef.current) {
+            engineRef.current.stop();
+        }
+        clearHighlights();
+        setTtsActive(false);
+        setTtsPlaying(false);
+        setTtsPaused(false);
+        setCurrentSegmentIndex(-1);
+        setCurrentSpeaker(null);
+        setTotalSegments(0);
+        segmentsRef.current = [];
+    }, [clearHighlights]);
 
     const pauseTts = useCallback(() => {
         if (engineRef.current) {
             engineRef.current.pause();
-            setTtsPlaying(false);
-            setTtsPaused(true);
         }
+        setTtsPlaying(false);
+        setTtsPaused(true);
     }, []);
 
     const resumeTts = useCallback(() => {
         if (engineRef.current) {
             engineRef.current.resume();
-            setTtsPlaying(true);
-            setTtsPaused(false);
         }
+        setTtsPaused(false);
+        setTtsPlaying(true);
     }, []);
 
-    const doStop = useCallback(() => {
-        activeRef.current = false;
-        if (abortRef.current) {
-            abortRef.current.abort();
-            abortRef.current = null;
-        }
-        stopAllEngines();
-        clearHighlights();
-        setTtsActive(false);
-        setTtsPlaying(false);
-        setTtsPaused(false);
-        setTtsLoading(false);
-        setCurrentSegmentIndex(0);
-        setTotalSegments(0);
-        setCurrentSpeaker('Narrator');
-    }, [clearHighlights]);
-
-    const stopTts = useCallback(() => {
-        doStop();
-    }, [doStop]);
-
     const nextSegment = useCallback(() => {
-        const segments = segmentsRef.current;
-        const nextIdx = currentIndexRef.current + 1;
-        if (nextIdx >= segments.length) return;
-
-        // Abort current playback
-        if (abortRef.current) {
-            abortRef.current.abort();
+        const nextIdx = currentSegmentIndex + 1;
+        if (nextIdx < segmentsRef.current.length) {
+            if (engineRef.current) engineRef.current.stop();
+            stoppedRef.current = false;
+            playFromIndex(nextIdx);
         }
-        abortRef.current = new AbortController();
-
-        const engineType = settingsRef.current.ttsEngine || 'cloud';
-        engineRef.current = getTtsEngine(engineType);
-
-        // Start from next segment
-        playbackLoop(nextIdx);
-    }, [playbackLoop]);
+    }, [currentSegmentIndex, playFromIndex]);
 
     const prevSegment = useCallback(() => {
-        const prevIdx = Math.max(0, currentIndexRef.current - 1);
+        const prevIdx = Math.max(0, currentSegmentIndex - 1);
+        if (engineRef.current) engineRef.current.stop();
+        stoppedRef.current = false;
+        playFromIndex(prevIdx);
+    }, [currentSegmentIndex, playFromIndex]);
 
-        // Abort current playback
-        if (abortRef.current) {
-            abortRef.current.abort();
+    const toggleTts = useCallback(() => {
+        if (ttsActive) {
+            if (ttsPlaying) {
+                pauseTts();
+            } else if (ttsPaused) {
+                resumeTts();
+            } else {
+                stopTts();
+            }
+        } else {
+            startTts();
         }
-        abortRef.current = new AbortController();
+    }, [ttsActive, ttsPlaying, ttsPaused, startTts, stopTts, pauseTts, resumeTts]);
 
-        const engineType = settingsRef.current.ttsEngine || 'cloud';
-        engineRef.current = getTtsEngine(engineType);
-
-        // Start from previous segment
-        playbackLoop(prevIdx);
-    }, [playbackLoop]);
-
-    // ── Cleanup on unmount ───────────────────────────────
+    // ── Cleanup on unmount ──────────────────────────────────
     useEffect(() => {
         return () => {
+            stoppedRef.current = true;
             activeRef.current = false;
-            if (abortRef.current) abortRef.current.abort();
-            stopAllEngines();
+            if (engineRef.current) {
+                engineRef.current.destroy();
+                engineRef.current = null;
+            }
+            if (audioElRef.current) {
+                audioElRef.current.pause();
+                audioElRef.current.removeAttribute('src');
+                audioElRef.current = null;
+            }
         };
     }, []);
 
-    // ── Re-analyze when chapter changes (relocated event) ──
+    // ── Re-initialize engine when settings change ─────────
     useEffect(() => {
-        if (!ttsActive || !activeRef.current) return;
-
-        // When the rendition navigates to a new chapter while TTS is active,
-        // we need to re-analyze. The Reader.jsx 'relocated' handler will trigger
-        // a re-render. We listen for it via a small delay after chapter change.
-    }, [ttsActive]);
+        if (engineRef.current && ttsActive) {
+            // Engine type changed — need to reinitialize
+            const currentType = engineRef.current instanceof Object ? settings.ttsEngine : 'system';
+            if (currentType !== settingsRef.current.ttsEngine) {
+                stopTts();
+            }
+        }
+    }, [settings.ttsEngine]); // eslint-disable-line react-hooks/exhaustive-deps
 
     return {
+        // State
         ttsActive,
         ttsPlaying,
         ttsPaused,
         ttsLoading,
-        currentSpeaker,
         currentSegmentIndex,
+        currentSpeaker,
         totalSegments,
-        kokoroLoading: false, // kept for backward compat with existing Reader.jsx
+        engineReady,
+        kokoroLoading,
+
+        // Actions
         startTts,
+        stopTts,
         pauseTts,
         resumeTts,
-        stopTts,
+        toggleTts,
         nextSegment,
         prevSegment,
     };

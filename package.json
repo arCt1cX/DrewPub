@@ -13,6 +13,7 @@
     "epubjs": "^0.3.93",
     "idb": "^8.0.1",
     "jszip": "^3.10.1",
+    "kokoro-js": "^1.2.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.28.0"

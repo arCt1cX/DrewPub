@@ -104,7 +104,7 @@ export const DEFAULT_SETTINGS = {
     librarySortOrder: 'desc',
     dictionaryMode: 'word', // 'word' | 'sentence'
     // ── TTS Settings ──────────────────────────────────
-    ttsEngine: 'cloud', // 'cloud' | 'system'
+    ttsEngine: 'cloud', // 'cloud' | 'system' | 'kokoro'
     ttsRate: 1.0,        // 0.5–2.0
     ttsPitch: 1.0,       // 0.5–2.0
     ttsNarratorVoice: null, // voice name or null for default
