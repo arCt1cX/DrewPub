@@ -8,7 +8,6 @@ import ReaderControls from '../components/ReaderControls';
 import SettingsPanel from '../components/SettingsPanel';
 import TableOfContents from '../components/TableOfContents';
 import DictionaryPopup from '../components/DictionaryPopup';
-import TTSPlayer from '../components/TTSPlayer';
 import './Reader.css';
 
 export default function Reader() {
@@ -31,9 +30,6 @@ export default function Reader() {
     const [showToc, setShowToc] = useState(false);
     const [totalPages, setTotalPages] = useState('Calculating...');
     const [currentPage, setCurrentPage] = useState(0);
-
-    // TTS state
-    const [showTts, setShowTts] = useState(false);
 
     // Dictionary popup state
     const [dictWord, setDictWord] = useState(null);
@@ -360,28 +356,6 @@ export default function Reader() {
     const handleGoBack = () => navigate('/');
 
     const isPaginated = settings.readingMode !== 'scroll';
-
-    // ── Extract chapter text from epub.js iframe ──────────
-    const getChapterText = useCallback(async () => {
-        try {
-            const iframe = viewerRef.current?.querySelector('iframe');
-            if (!iframe) return '';
-            const doc = iframe.contentDocument || iframe.contentWindow?.document;
-            if (!doc || !doc.body) return '';
-            return doc.body.innerText || doc.body.textContent || '';
-        } catch (_) {
-            return '';
-        }
-    }, []);
-
-    // ── TTS chapter complete handler ──────────────────────
-    const handleTtsChapterComplete = useCallback(() => {
-        if (settings.ttsAutoAdvance && renditionRef.current) {
-            renditionRef.current.next();
-            // TTS will need to be re-triggered on the new chapter
-            // The user can press play again, or we could auto-play
-        }
-    }, [settings.ttsAutoAdvance]);
 
     // ── Overlay touch/click handlers (BOTH modes) ─────────
     const overlayTouchRef = useRef(null);
@@ -712,7 +686,6 @@ export default function Reader() {
                     totalPages={totalPages}
                     isPaginated={isPaginated}
                     onBack={handleGoBack}
-                    onToggleTts={() => { setShowTts(!showTts); }}
                     onToggleToc={() => { setShowToc(!showToc); setShowSettings(false); }}
                     onToggleSettings={() => { setShowSettings(!showSettings); setShowToc(false); }}
                     onPrev={() => renditionRef.current?.prev()}
@@ -772,14 +745,6 @@ export default function Reader() {
                     currentHref=""
                     onSelect={handleGoToChapter}
                     onClose={() => setShowToc(false)}
-                />
-            )}
-            {showTts && (
-                <TTSPlayer
-                    visible={showTts}
-                    getChapterText={getChapterText}
-                    onChapterComplete={handleTtsChapterComplete}
-                    onClose={() => setShowTts(false)}
                 />
             )}
         </div>
