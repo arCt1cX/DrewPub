@@ -4,6 +4,16 @@ import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig({
   base: '/',
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          // Keep kokoro-js in its own lazy-loaded chunk
+          'kokoro': ['kokoro-js'],
+        }
+      }
+    }
+  },
   plugins: [
     react(),
     VitePWA({
@@ -35,6 +45,9 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
+        // Exclude large TTS model chunks from precaching
+        globIgnores: ['**/kokoro*', '**/*.wasm'],
+        maximumFileSizeToCacheInBytes: 5 * 1024 * 1024, // 5MB
         runtimeCaching: [
           {
             urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
@@ -53,6 +66,33 @@ export default defineConfig({
             handler: 'CacheFirst',
             options: {
               cacheName: 'gstatic-fonts-cache',
+              expiration: {
+                maxEntries: 10,
+                maxAgeSeconds: 60 * 60 * 24 * 365
+              },
+              cacheableResponse: { statuses: [0, 200] }
+            }
+          },
+          {
+            // Cache Kokoro TTS ONNX model files from Hugging Face
+            urlPattern: /^https:\/\/huggingface\.co\/.*Kokoro.*/i,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'kokoro-model-cache',
+              expiration: {
+                maxEntries: 20,
+                maxAgeSeconds: 60 * 60 * 24 * 365
+              },
+              cacheableResponse: { statuses: [0, 200] },
+              matchOptions: { ignoreSearch: true },
+            }
+          },
+          {
+            // Cache ONNX runtime WASM files
+            urlPattern: /\.wasm$/i,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'wasm-cache',
               expiration: {
                 maxEntries: 10,
                 maxAgeSeconds: 60 * 60 * 24 * 365

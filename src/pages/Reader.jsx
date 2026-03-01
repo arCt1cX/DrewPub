@@ -8,12 +8,14 @@ import ReaderControls from '../components/ReaderControls';
 import SettingsPanel from '../components/SettingsPanel';
 import TableOfContents from '../components/TableOfContents';
 import DictionaryPopup from '../components/DictionaryPopup';
+import TtsControls from '../components/TtsControls';
+import useTts from '../hooks/useTts';
 import './Reader.css';
 
 export default function Reader() {
     const { bookId } = useParams();
     const navigate = useNavigate();
-    const { settings } = useSettings();
+    const { settings, updateSetting } = useSettings();
 
     const viewerRef = useRef(null);
     const bookRef = useRef(null);
@@ -43,6 +45,9 @@ export default function Reader() {
     const showSettingsRef = useRef(false);
     const showTocRef = useRef(false);
     const settingsRef = useRef(settings);
+
+    // TTS hook
+    const tts = useTts({ renditionRef, viewerRef, settings, bookId });
 
     useEffect(() => { showControlsRef.current = showControls; }, [showControls]);
     useEffect(() => { showSettingsRef.current = showSettings; }, [showSettings]);
@@ -144,6 +149,19 @@ export default function Reader() {
                 const style = doc.createElement('style');
                 style.textContent = `
                     * { -webkit-touch-callout: none !important; }
+                    .tts-highlight {
+                        background-color: rgba(124, 92, 252, 0.2) !important;
+                        border-radius: 2px;
+                        transition: background-color 0.3s ease;
+                        box-decoration-break: clone;
+                        -webkit-box-decoration-break: clone;
+                    }
+                    .tts-highlight-block {
+                        background-color: rgba(124, 92, 252, 0.1) !important;
+                        border-left: 3px solid rgba(124, 92, 252, 0.5) !important;
+                        padding-left: 8px !important;
+                        transition: background-color 0.3s ease;
+                    }
                 `;
 
                 // Inject custom fonts into the iframe
@@ -688,6 +706,14 @@ export default function Reader() {
                     onBack={handleGoBack}
                     onToggleToc={() => { setShowToc(!showToc); setShowSettings(false); }}
                     onToggleSettings={() => { setShowSettings(!showSettings); setShowToc(false); }}
+                    onToggleTts={() => {
+                        if (tts.ttsActive) {
+                            tts.stopTts();
+                        } else {
+                            tts.startTts();
+                        }
+                    }}
+                    ttsActive={tts.ttsActive}
                     onPrev={() => renditionRef.current?.prev()}
                     onNext={() => renditionRef.current?.next()}
                 />
@@ -732,6 +758,30 @@ export default function Reader() {
                     loading={dictLoading}
                     position={dictPosition}
                     onClose={closeDictionary}
+                />
+            )}
+
+            {/* TTS Controls */}
+            {tts.ttsActive && (
+                <TtsControls
+                    visible={tts.ttsActive}
+                    playing={tts.ttsPlaying}
+                    paused={tts.ttsPaused}
+                    loading={tts.ttsLoading}
+                    currentSpeaker={tts.currentSpeaker}
+                    currentSegmentIndex={tts.currentSegmentIndex}
+                    totalSegments={tts.totalSegments}
+                    kokoroLoading={tts.kokoroLoading}
+                    onPlayPause={() => {
+                        if (tts.ttsPlaying) tts.pauseTts();
+                        else if (tts.ttsPaused) tts.resumeTts();
+                        else tts.startTts();
+                    }}
+                    onStop={tts.stopTts}
+                    onNext={tts.nextSegment}
+                    onPrev={tts.prevSegment}
+                    rate={settings.ttsRate || 1.0}
+                    onRateChange={(r) => updateSetting('ttsRate', r)}
                 />
             )}
 

@@ -1,14 +1,14 @@
 import { openDB } from 'idb';
 
 const DB_NAME = 'drewpub-db';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 let dbPromise;
 
 function getDB() {
     if (!dbPromise) {
         dbPromise = openDB(DB_NAME, DB_VERSION, {
-            upgrade(db) {
+            upgrade(db, oldVersion) {
                 if (!db.objectStoreNames.contains('books')) {
                     const bookStore = db.createObjectStore('books', { keyPath: 'id' });
                     bookStore.createIndex('title', 'title');
@@ -21,6 +21,15 @@ function getDB() {
                 }
                 if (!db.objectStoreNames.contains('settings')) {
                     db.createObjectStore('settings', { keyPath: 'key' });
+                }
+                // v2: TTS stores
+                if (!db.objectStoreNames.contains('ttsCache')) {
+                    const ttsStore = db.createObjectStore('ttsCache', { keyPath: 'id' });
+                    ttsStore.createIndex('bookId', 'bookId');
+                }
+                if (!db.objectStoreNames.contains('dialogueAnalysis')) {
+                    const daStore = db.createObjectStore('dialogueAnalysis', { keyPath: 'id' });
+                    daStore.createIndex('bookId', 'bookId');
                 }
             }
         });
@@ -98,4 +107,61 @@ export async function getAllSettings() {
         map[s.key] = s.value;
     }
     return map;
+}
+
+// ─── TTS Cache ──────────────────────────────────────
+
+export async function saveTtsSegment(segment) {
+    // segment: { id: 'bookId-chIdx-segIdx', bookId, chapterIndex, segmentIndex, audioData }
+    const db = await getDB();
+    return db.put('ttsCache', segment);
+}
+
+export async function getTtsSegments(bookId, chapterIndex) {
+    const db = await getDB();
+    const all = await db.getAllFromIndex('ttsCache', 'bookId', bookId);
+    return all.filter(s => s.chapterIndex === chapterIndex);
+}
+
+export async function clearTtsCache(bookId) {
+    const db = await getDB();
+    const all = await db.getAllFromIndex('ttsCache', 'bookId', bookId);
+    const tx = db.transaction('ttsCache', 'readwrite');
+    for (const s of all) {
+        tx.store.delete(s.id);
+    }
+    await tx.done;
+}
+
+// ─── Dialogue Analysis Cache ────────────────────────
+
+export async function saveDialogueAnalysis(analysis) {
+    // analysis: { id: 'bookId-chIdx', bookId, chapterIndex, segments, characters }
+    const db = await getDB();
+    return db.put('dialogueAnalysis', analysis);
+}
+
+export async function getDialogueAnalysis(bookId, chapterIndex) {
+    const db = await getDB();
+    return db.get('dialogueAnalysis', `${bookId}-${chapterIndex}`);
+}
+
+export async function getBookCharacters(bookId) {
+    const db = await getDB();
+    const all = await db.getAllFromIndex('dialogueAnalysis', 'bookId', bookId);
+    const characters = {};
+    for (const chapter of all) {
+        if (chapter.characters) {
+            for (const [name, info] of Object.entries(chapter.characters)) {
+                if (!characters[name]) {
+                    characters[name] = { ...info, count: 0 };
+                }
+                characters[name].count += info.count || 1;
+                if (info.gender && info.gender !== 'unknown') {
+                    characters[name].gender = info.gender;
+                }
+            }
+        }
+    }
+    return characters;
 }

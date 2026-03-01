@@ -103,6 +103,14 @@ export const DEFAULT_SETTINGS = {
     librarySortBy: 'lastReadAt', // 'title' | 'author' | 'lastReadAt'
     librarySortOrder: 'desc',
     dictionaryMode: 'word', // 'word' | 'sentence'
+    // ── TTS Settings ──────────────────────────────────
+    ttsEngine: 'system', // 'kokoro' | 'system' | 'auto'
+    ttsRate: 1.0,        // 0.5–2.0
+    ttsPitch: 1.0,       // 0.5–2.0
+    ttsNarratorVoice: null, // voice name or null for default
+    ttsHighlight: true,  // highlight current sentence
+    ttsAutoAdvance: true, // auto-advance pages during TTS
+    ttsMultiVoice: true, // use different voices for characters
 };
 
 export function applyTheme(theme) {

@@ -1,0 +1,203 @@
+/* ─── TTS Controls ───────────────────────────────────── */
+
+.tts-controls {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 85;
+    background: rgba(10, 10, 15, 0.92);
+    backdrop-filter: blur(24px) saturate(1.5);
+    -webkit-backdrop-filter: blur(24px) saturate(1.5);
+    border-top: 1px solid var(--border);
+    padding: 10px 16px;
+    padding-bottom: calc(10px + var(--safe-bottom));
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    animation: ttsSlideIn 0.3s ease-out;
+}
+
+@keyframes ttsSlideIn {
+    from {
+        transform: translateY(100%);
+        opacity: 0;
+    }
+    to {
+        transform: translateY(0);
+        opacity: 1;
+    }
+}
+
+/* ─── Speaker Row ────────────────────────────────────── */
+
+.tts-speaker-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.tts-speaker-icon {
+    font-size: 0.9rem;
+    flex-shrink: 0;
+}
+
+.tts-speaker-name {
+    flex: 1;
+    font-size: 0.78rem;
+    font-weight: 500;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.tts-close-btn {
+    width: 28px;
+    height: 28px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: all var(--transition-fast);
+}
+
+.tts-close-btn:hover {
+    background: rgba(255, 80, 80, 0.2);
+    color: #ff5050;
+}
+
+/* ─── Progress Bar ───────────────────────────────────── */
+
+.tts-progress-bar {
+    width: 100%;
+    height: 3px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.tts-progress-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 2px;
+    transition: width 0.3s ease;
+}
+
+/* ─── Buttons Row ────────────────────────────────────── */
+
+.tts-buttons-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+}
+
+.tts-play-btn {
+    width: 48px;
+    height: 48px;
+    border: none;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #fff;
+    font-size: 1.2rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all var(--transition-fast);
+    box-shadow: 0 2px 16px rgba(124, 92, 252, 0.3);
+}
+
+.tts-play-btn:hover {
+    transform: scale(1.05);
+    box-shadow: 0 4px 24px rgba(124, 92, 252, 0.5);
+}
+
+.tts-play-btn:active {
+    transform: scale(0.95);
+}
+
+.tts-play-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+    transform: none;
+}
+
+.tts-nav-btn {
+    width: 36px;
+    height: 36px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text);
+    font-size: 1rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all var(--transition-fast);
+}
+
+.tts-nav-btn:hover {
+    background: rgba(255, 255, 255, 0.12);
+}
+
+.tts-nav-btn:active {
+    transform: scale(0.9);
+}
+
+.tts-nav-btn:disabled {
+    opacity: 0.3;
+    cursor: default;
+    transform: none;
+}
+
+.tts-speed-btn {
+    min-width: 42px;
+    height: 28px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--accent);
+    font-size: 0.72rem;
+    font-weight: 600;
+    cursor: pointer;
+    padding: 0 8px;
+    transition: all var(--transition-fast);
+    font-family: inherit;
+}
+
+.tts-speed-btn:hover {
+    border-color: var(--accent);
+    background: rgba(124, 92, 252, 0.1);
+}
+
+.tts-counter {
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    min-width: 42px;
+    text-align: center;
+}
+
+/* ─── Spinner ────────────────────────────────────────── */
+
+.tts-spinner {
+    width: 20px;
+    height: 20px;
+    border: 2px solid rgba(255, 255, 255, 0.2);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: ttsSpin 0.7s linear infinite;
+    display: inline-block;
+}
+
+@keyframes ttsSpin {
+    to { transform: rotate(360deg); }
+}

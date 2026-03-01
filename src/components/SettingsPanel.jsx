@@ -248,6 +248,113 @@ export default function SettingsPanel({ onClose }) {
                         </div>
                     </section>
 
+                    {/* ─── Text-to-Speech ────────────────────── */}
+                    <section className="settings-section">
+                        <h3 className="section-label">Text-to-Speech</h3>
+
+                        {/* Engine selector */}
+                        <div className="toggle-group">
+                            <button
+                                className={`toggle-btn ${(settings.ttsEngine || 'system') === 'system' ? 'active' : ''}`}
+                                onClick={() => updateSetting('ttsEngine', 'system')}
+                            >
+                                🗣 System
+                            </button>
+                            <button
+                                className={`toggle-btn ${settings.ttsEngine === 'kokoro' ? 'active' : ''}`}
+                                onClick={() => updateSetting('ttsEngine', 'kokoro')}
+                            >
+                                🤖 Kokoro AI
+                            </button>
+                        </div>
+
+                        {settings.ttsEngine === 'kokoro' && (
+                            <div className="tts-kokoro-info">
+                                <span className="slider-label" style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                                    ℹ️ Kokoro requires ~87MB model download (cached for offline use)
+                                </span>
+                            </div>
+                        )}
+
+                        {/* Speed */}
+                        <div className="slider-row">
+                            <span className="slider-label">Speed</span>
+                            <input
+                                type="range"
+                                min="0.5"
+                                max="2.0"
+                                step="0.1"
+                                value={settings.ttsRate || 1.0}
+                                onChange={e => updateSetting('ttsRate', Number(e.target.value))}
+                            />
+                            <span className="slider-value">{(settings.ttsRate || 1.0).toFixed(1)}x</span>
+                        </div>
+
+                        {/* Pitch (system engine only) */}
+                        {(settings.ttsEngine || 'system') === 'system' && (
+                            <div className="slider-row">
+                                <span className="slider-label">Pitch</span>
+                                <input
+                                    type="range"
+                                    min="0.5"
+                                    max="2.0"
+                                    step="0.1"
+                                    value={settings.ttsPitch || 1.0}
+                                    onChange={e => updateSetting('ttsPitch', Number(e.target.value))}
+                                />
+                                <span className="slider-value">{(settings.ttsPitch || 1.0).toFixed(1)}</span>
+                            </div>
+                        )}
+
+                        {/* Multi-voice toggle */}
+                        <div className="toggle-group">
+                            <button
+                                className={`toggle-btn ${settings.ttsMultiVoice !== false ? 'active' : ''}`}
+                                onClick={() => updateSetting('ttsMultiVoice', true)}
+                            >
+                                🎭 Character Voices
+                            </button>
+                            <button
+                                className={`toggle-btn ${settings.ttsMultiVoice === false ? 'active' : ''}`}
+                                onClick={() => updateSetting('ttsMultiVoice', false)}
+                            >
+                                🗣 Single Voice
+                            </button>
+                        </div>
+
+                        {/* Highlight toggle */}
+                        <div className="toggle-group">
+                            <button
+                                className={`toggle-btn ${settings.ttsHighlight !== false ? 'active' : ''}`}
+                                onClick={() => updateSetting('ttsHighlight', true)}
+                            >
+                                ✨ Highlight On
+                            </button>
+                            <button
+                                className={`toggle-btn ${settings.ttsHighlight === false ? 'active' : ''}`}
+                                onClick={() => updateSetting('ttsHighlight', false)}
+                            >
+                                Highlight Off
+                            </button>
+                        </div>
+
+                        {/* Auto-advance toggle */}
+                        <div className="toggle-group">
+                            <button
+                                className={`toggle-btn ${settings.ttsAutoAdvance !== false ? 'active' : ''}`}
+                                onClick={() => updateSetting('ttsAutoAdvance', true)}
+                            >
+                                📖 Auto-Advance
+                            </button>
+                            <button
+                                className={`toggle-btn ${settings.ttsAutoAdvance === false ? 'active' : ''}`}
+                                onClick={() => updateSetting('ttsAutoAdvance', false)}
+                            >
+                                ⏹ Manual
+                            </button>
+                        </div>
+                    </section>
+
                     {/* ─── Background Image ───────────────── */}
                     <section className="settings-section">
                         <h3 className="section-label">Background Image</h3>
