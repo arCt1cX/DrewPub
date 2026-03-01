@@ -2,7 +2,7 @@
  * ttsEngine.js
  *
  * TTS engine factory — two engines:
- *   • cloud  — Microsoft Edge Neural Voices via direct browser WebSocket
+ *   • cloud  — Microsoft Edge Neural Voices via /api/tts server endpoint
  *   • system — Web Speech API (offline fallback)
  *
  * Each engine implements: init(), speak(), stop(), pause(), resume(),
@@ -37,33 +37,25 @@ export const VOICE_PRESETS = {
 // ── Silent WAV blob (for iOS audio unlock) ────────────────
 
 export function createSilentWavBlob() {
-    // Minimal valid WAV: 44-byte header + 1 second of silence at 8kHz mono 8-bit
     const sampleRate = 8000;
-    const numSamples = sampleRate; // 1 second
+    const numSamples = sampleRate;
     const buffer = new ArrayBuffer(44 + numSamples);
     const view = new DataView(buffer);
 
-    // RIFF header
     writeString(view, 0, 'RIFF');
     view.setUint32(4, 36 + numSamples, true);
     writeString(view, 8, 'WAVE');
-
-    // fmt chunk
     writeString(view, 12, 'fmt ');
-    view.setUint32(16, 16, true);        // chunk size
-    view.setUint16(20, 1, true);          // PCM
-    view.setUint16(22, 1, true);          // mono
-    view.setUint32(24, sampleRate, true); // sample rate
-    view.setUint32(28, sampleRate, true); // byte rate
-    view.setUint16(32, 1, true);          // block align
-    view.setUint16(34, 8, true);          // bits per sample
-
-    // data chunk
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate, true);
+    view.setUint16(32, 1, true);
+    view.setUint16(34, 8, true);
     writeString(view, 36, 'data');
     view.setUint32(40, numSamples, true);
-    // Samples are all 128 (silence for 8-bit PCM)
-    const bytes = new Uint8Array(buffer, 44);
-    bytes.fill(128);
+    new Uint8Array(buffer, 44).fill(128);
 
     return new Blob([buffer], { type: 'audio/wav' });
 }
@@ -74,147 +66,7 @@ function writeString(view, offset, str) {
     }
 }
 
-// ── Edge TTS WebSocket Protocol (client-side) ─────────────
-
-const TRUSTED_CLIENT_TOKEN = '6A5AA1D4EAFF4E9FB37E23D68491D6F4';
-const WSS_BASE = `wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=${TRUSTED_CLIENT_TOKEN}&ConnectionId=`;
-const OUTPUT_FORMAT = 'audio-24khz-48kbitrate-mono-mp3';
-
-function escapeXml(text) {
-    return text
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&apos;');
-}
-
-/**
- * Synthesize speech via Edge TTS WebSocket directly from the browser.
- * Returns a Blob of audio/mpeg data.
- */
-function synthesizeEdgeTTS(text, voice, rate, pitch) {
-    return new Promise((resolve, reject) => {
-        const connId = crypto.randomUUID().replace(/-/g, '');
-        const requestId = crypto.randomUUID().replace(/-/g, '');
-        const url = WSS_BASE + connId;
-
-        let ws;
-        try {
-            ws = new WebSocket(url);
-        } catch (e) {
-            reject(new Error(`WebSocket creation failed: ${e.message}`));
-            return;
-        }
-
-        ws.binaryType = 'arraybuffer';
-
-        const audioChunks = [];
-        let done = false;
-
-        const timeout = setTimeout(() => {
-            if (!done) {
-                done = true;
-                try { ws.close(); } catch (_) {}
-                reject(new Error('Edge TTS timeout (30s)'));
-            }
-        }, 30000);
-
-        ws.onopen = () => {
-            // Send config message
-            ws.send(
-                `Content-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n` +
-                JSON.stringify({
-                    context: {
-                        synthesis: {
-                            audio: {
-                                metadataoptions: {
-                                    sentenceBoundaryEnabled: 'false',
-                                    wordBoundaryEnabled: 'false',
-                                },
-                                outputFormat: OUTPUT_FORMAT,
-                            },
-                        },
-                    },
-                })
-            );
-
-            // Build SSML
-            const rateStr = rate >= 1
-                ? `+${Math.round((rate - 1) * 100)}%`
-                : `-${Math.round((1 - rate) * 100)}%`;
-            const pitchStr = pitch >= 1
-                ? `+${Math.round((pitch - 1) * 50)}Hz`
-                : `-${Math.round((1 - pitch) * 50)}Hz`;
-
-            const ssml =
-                `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="en-US">` +
-                `<voice name="${voice}">` +
-                `<prosody rate="${rateStr}" pitch="${pitchStr}" volume="+0%">` +
-                escapeXml(text) +
-                `</prosody></voice></speak>`;
-
-            // Send SSML synthesis request
-            ws.send(
-                `X-RequestId:${requestId}\r\nContent-Type:application/ssml+xml\r\nPath:ssml\r\n\r\n` +
-                ssml
-            );
-        };
-
-        ws.onmessage = (event) => {
-            if (typeof event.data === 'string') {
-                // Text frame — check for turn.end
-                if (event.data.includes('turn.end')) {
-                    done = true;
-                    clearTimeout(timeout);
-                    try { ws.close(); } catch (_) {}
-
-                    // Concatenate audio chunks
-                    const total = audioChunks.reduce((a, c) => a + c.byteLength, 0);
-                    if (total === 0) {
-                        reject(new Error('Edge TTS returned no audio data'));
-                        return;
-                    }
-                    const result = new Uint8Array(total);
-                    let off = 0;
-                    for (const chunk of audioChunks) {
-                        result.set(new Uint8Array(chunk), off);
-                        off += chunk.byteLength;
-                    }
-                    resolve(new Blob([result], { type: 'audio/mpeg' }));
-                }
-            } else {
-                // Binary frame — extract audio after header
-                const buf = event.data;
-                if (buf.byteLength > 2) {
-                    const view = new DataView(buf);
-                    const headerLen = view.getUint16(0);
-                    if (buf.byteLength > headerLen + 2) {
-                        audioChunks.push(buf.slice(headerLen + 2));
-                    }
-                }
-            }
-        };
-
-        ws.onerror = () => {
-            if (!done) {
-                done = true;
-                clearTimeout(timeout);
-                reject(new Error('Edge TTS WebSocket connection failed'));
-            }
-        };
-
-        ws.onclose = (event) => {
-            if (!done) {
-                done = true;
-                clearTimeout(timeout);
-                reject(new Error(`Edge TTS WebSocket closed (code: ${event.code})`));
-            }
-        };
-    });
-}
-
-// ── Cloud Engine (Edge TTS via browser WebSocket) ─────────
+// ── Cloud Engine (Edge TTS via /api/tts server endpoint) ──
 
 function createCloudEngine() {
     let audioEl = null;
@@ -222,13 +74,24 @@ function createCloudEngine() {
     let ready = false;
     let aborted = false;
     let resolvePlay = null;
-    let currentWs = null;
 
-    // Prefetch cache: Map<cacheKey, Blob>
     const prefetchCache = new Map();
 
     function cacheKey(text, voice, rate, pitch) {
         return `${voice}|${rate}|${pitch}|${text.substring(0, 100)}`;
+    }
+
+    async function fetchAudio(text, voice, rate, pitch) {
+        const resp = await fetch('/api/tts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text, voice, rate, pitch }),
+        });
+        if (!resp.ok) {
+            const err = await resp.text().catch(() => resp.statusText);
+            throw new Error(`TTS API error ${resp.status}: ${err}`);
+        }
+        return resp.blob();
     }
 
     return {
@@ -237,34 +100,18 @@ function createCloudEngine() {
         get isReady() { return ready; },
 
         async init() {
-            // Test WebSocket connectivity with a quick connection attempt
             try {
-                const testId = crypto.randomUUID().replace(/-/g, '');
-                const testUrl = WSS_BASE + testId;
-                const canConnect = await new Promise((resolve) => {
-                    const ws = new WebSocket(testUrl);
-                    const t = setTimeout(() => {
-                        try { ws.close(); } catch (_) {}
-                        resolve(false);
-                    }, 8000);
-                    ws.onopen = () => {
-                        clearTimeout(t);
-                        ws.close();
-                        resolve(true);
-                    };
-                    ws.onerror = () => {
-                        clearTimeout(t);
-                        resolve(false);
-                    };
+                const resp = await fetch('/api/tts?test=1', {
+                    signal: AbortSignal.timeout ? AbortSignal.timeout(12000) : undefined,
                 });
-                if (canConnect) {
+                const data = await resp.json();
+                if (data.ok) {
                     ready = true;
-                    console.log('[TTS] Edge TTS WebSocket connection successful');
+                    console.log('[TTS] Edge TTS Cloud engine ready (server WebSocket OK)');
                     return true;
-                } else {
-                    console.warn('[TTS] Edge TTS WebSocket connection failed — Cloud engine unavailable');
-                    return false;
                 }
+                console.warn('[TTS] Edge TTS server test failed:', data.error);
+                return false;
             } catch (e) {
                 console.warn('[TTS] Edge TTS init error:', e.message);
                 return false;
@@ -278,20 +125,17 @@ function createCloudEngine() {
         async speak(text, voice, rate, pitch) {
             aborted = false;
             const key = cacheKey(text, voice, rate, pitch);
-
             let audioBlob;
 
-            // Check prefetch cache first
             if (prefetchCache.has(key)) {
                 audioBlob = prefetchCache.get(key);
                 prefetchCache.delete(key);
             } else {
-                audioBlob = await synthesizeEdgeTTS(text, voice, rate || 1.0, pitch || 1.0);
+                audioBlob = await fetchAudio(text, voice, rate || 1.0, pitch || 1.0);
             }
 
             if (aborted) return;
 
-            // Play the audio
             return new Promise((resolve, reject) => {
                 resolvePlay = resolve;
 
@@ -300,80 +144,46 @@ function createCloudEngine() {
                     audioEl.volume = 1.0;
                 }
 
-                // Revoke previous URL
-                if (currentObjectUrl) {
-                    URL.revokeObjectURL(currentObjectUrl);
-                }
+                if (currentObjectUrl) URL.revokeObjectURL(currentObjectUrl);
 
                 currentObjectUrl = URL.createObjectURL(audioBlob);
                 audioEl.src = currentObjectUrl;
-                audioEl.playbackRate = 1.0; // Rate is already in the SSML
+                audioEl.playbackRate = 1.0;
 
-                audioEl.onended = () => {
-                    resolvePlay = null;
-                    resolve();
-                };
-                audioEl.onerror = () => {
-                    resolvePlay = null;
-                    reject(new Error('Audio playback failed'));
-                };
+                audioEl.onended = () => { resolvePlay = null; resolve(); };
+                audioEl.onerror = () => { resolvePlay = null; reject(new Error('Audio playback failed')); };
 
-                if (aborted) {
-                    resolvePlay = null;
-                    resolve();
-                    return;
-                }
+                if (aborted) { resolvePlay = null; resolve(); return; }
 
-                audioEl.play().catch(e => {
-                    resolvePlay = null;
-                    reject(e);
-                });
+                audioEl.play().catch(e => { resolvePlay = null; reject(e); });
             });
         },
 
         async prefetch(text, voice, rate, pitch) {
             const key = cacheKey(text, voice, rate, pitch);
             if (prefetchCache.has(key)) return;
-
             try {
-                const blob = await synthesizeEdgeTTS(text, voice, rate || 1.0, pitch || 1.0);
+                const blob = await fetchAudio(text, voice, rate || 1.0, pitch || 1.0);
                 prefetchCache.set(key, blob);
-                // Keep cache small
                 if (prefetchCache.size > 5) {
-                    const firstKey = prefetchCache.keys().next().value;
-                    prefetchCache.delete(firstKey);
+                    prefetchCache.delete(prefetchCache.keys().next().value);
                 }
-            } catch {
-                // Prefetch is best-effort
-            }
+            } catch { /* best-effort */ }
         },
 
         stop() {
             aborted = true;
-            if (audioEl) {
-                audioEl.pause();
-                audioEl.currentTime = 0;
-            }
-            if (resolvePlay) {
-                resolvePlay();
-                resolvePlay = null;
-            }
+            if (audioEl) { audioEl.pause(); audioEl.currentTime = 0; }
+            if (resolvePlay) { resolvePlay(); resolvePlay = null; }
         },
 
-        pause() {
-            if (audioEl) audioEl.pause();
-        },
+        pause() { if (audioEl) audioEl.pause(); },
 
-        resume() {
-            if (audioEl) audioEl.play().catch(() => {});
-        },
+        resume() { if (audioEl) audioEl.play().catch(() => {}); },
 
         destroy() {
             this.stop();
-            if (currentObjectUrl) {
-                URL.revokeObjectURL(currentObjectUrl);
-                currentObjectUrl = null;
-            }
+            if (currentObjectUrl) { URL.revokeObjectURL(currentObjectUrl); currentObjectUrl = null; }
             prefetchCache.clear();
             audioEl = null;
             ready = false;
@@ -389,14 +199,12 @@ function createSystemEngine() {
     let resolvePlay = null;
     let aborted = false;
 
-    // Cache system voices by gender
     let systemVoices = [];
     let maleVoices = [];
     let femaleVoices = [];
 
     function loadVoices() {
         systemVoices = window.speechSynthesis?.getVoices() || [];
-        // Prefer English voices
         const english = systemVoices.filter(v => v.lang?.startsWith('en'));
         maleVoices = english.filter(v =>
             /\bmale\b/i.test(v.name) || /\bguy\b/i.test(v.name) ||
@@ -410,7 +218,6 @@ function createSystemEngine() {
             /\bvictoria\b/i.test(v.name)
         );
 
-        // If no gender classification found, split roughly
         if (maleVoices.length === 0 && femaleVoices.length === 0 && english.length > 1) {
             maleVoices = english.filter((_, i) => i % 2 === 0);
             femaleVoices = english.filter((_, i) => i % 2 === 1);
@@ -445,13 +252,11 @@ function createSystemEngine() {
                     resolve(true);
                     return;
                 }
-                // Chrome loads voices async
                 window.speechSynthesis.onvoiceschanged = () => {
                     loadVoices();
                     ready = systemVoices.length > 0;
                     resolve(ready);
                 };
-                // Timeout after 3s
                 setTimeout(() => {
                     loadVoices();
                     ready = systemVoices.length > 0;
@@ -460,9 +265,7 @@ function createSystemEngine() {
             });
         },
 
-        setAudioElement() {
-            // Not used for system engine
-        },
+        setAudioElement() {},
 
         async speak(text, voiceId, rate, pitch) {
             aborted = false;
@@ -478,53 +281,32 @@ function createSystemEngine() {
                 utterance.pitch = Math.max(0, Math.min(2, pitch || 1.0));
                 utterance.volume = 1.0;
 
-                utterance.onend = () => {
-                    currentUtterance = null;
-                    resolvePlay = null;
-                    resolve();
-                };
+                utterance.onend = () => { currentUtterance = null; resolvePlay = null; resolve(); };
                 utterance.onerror = (e) => {
                     currentUtterance = null;
                     resolvePlay = null;
-                    if (e.error === 'canceled' || aborted) {
-                        resolve();
-                    } else {
-                        reject(new Error(`Speech error: ${e.error}`));
-                    }
+                    if (e.error === 'canceled' || aborted) resolve();
+                    else reject(new Error(`Speech error: ${e.error}`));
                 };
 
                 currentUtterance = utterance;
-
-                if (aborted) {
-                    resolvePlay = null;
-                    resolve();
-                    return;
-                }
-
+                if (aborted) { resolvePlay = null; resolve(); return; }
                 window.speechSynthesis.speak(utterance);
             });
         },
 
-        // System engine has no prefetch
         async prefetch() {},
 
         stop() {
             aborted = true;
             window.speechSynthesis?.cancel();
             currentUtterance = null;
-            if (resolvePlay) {
-                resolvePlay();
-                resolvePlay = null;
-            }
+            if (resolvePlay) { resolvePlay(); resolvePlay = null; }
         },
 
-        pause() {
-            window.speechSynthesis?.pause();
-        },
+        pause() { window.speechSynthesis?.pause(); },
 
-        resume() {
-            window.speechSynthesis?.resume();
-        },
+        resume() { window.speechSynthesis?.resume(); },
 
         destroy() {
             this.stop();
@@ -535,11 +317,6 @@ function createSystemEngine() {
 
 // ── Factory ───────────────────────────────────────────────
 
-/**
- * Create a TTS engine instance.
- * @param {'cloud' | 'system'} type
- * @returns {Object} engine instance
- */
 export function createTTSEngine(type) {
     switch (type) {
         case 'cloud':
