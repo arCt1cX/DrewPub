@@ -266,26 +266,20 @@ export default function SettingsPanel({ onClose }) {
                             >
                                 🗣 System
                             </button>
-                            <button
-                                className={`toggle-btn ${settings.ttsEngine === 'kokoro' ? 'active' : ''}`}
-                                onClick={() => updateSetting('ttsEngine', 'kokoro')}
-                            >
-                                🤖 Kokoro
-                            </button>
                         </div>
 
                         {(settings.ttsEngine || 'cloud') === 'cloud' && (
                             <div className="tts-kokoro-info">
                                 <span className="slider-label" style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-                                    ☁️ High-quality Microsoft Neural voices via Cloudflare (requires internet)
+                                    ☁️ Microsoft Edge Neural voices — multi-character, natural prosody (requires internet)
                                 </span>
                             </div>
                         )}
 
-                        {settings.ttsEngine === 'kokoro' && (
+                        {settings.ttsEngine === 'system' && (
                             <div className="tts-kokoro-info">
                                 <span className="slider-label" style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-                                    ⚠️ Kokoro requires ~87MB download and powerful device. Prefer Cloud for best results.
+                                    🗣 Uses your device's built-in speech engine — works offline
                                 </span>
                             </div>
                         )}

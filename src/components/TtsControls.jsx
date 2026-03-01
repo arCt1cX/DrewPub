@@ -9,7 +9,6 @@ export default function TtsControls({
     currentSpeaker,
     currentSegmentIndex,
     totalSegments,
-    kokoroLoading,
     onPlayPause,
     onStop,
     onNext,
@@ -24,18 +23,7 @@ export default function TtsControls({
         : 0;
 
     return (
-        <div className="tts-controls glass animate-slide-in-up">
-            {/* Speaker indicator */}
-            <div className="tts-speaker-row">
-                <span className="tts-speaker-icon">🎙</span>
-                <span className="tts-speaker-name">
-                    {loading || kokoroLoading ? 'Loading...' : (currentSpeaker || 'Ready')}
-                </span>
-                <button className="tts-close-btn" onClick={onStop} title="Stop TTS">
-                    ✕
-                </button>
-            </div>
-
+        <div className="tts-controls glass">
             {/* Progress bar */}
             <div className="tts-progress-bar">
                 <div
@@ -44,58 +32,75 @@ export default function TtsControls({
                 />
             </div>
 
-            {/* Main controls */}
-            <div className="tts-buttons-row">
+            <div className="tts-controls-inner">
+                {/* Speaker info */}
+                <div className="tts-info">
+                    <span className="tts-speaker">
+                        {currentSpeaker === 'Narrator' ? '📖' : '🎭'}{' '}
+                        {currentSpeaker || 'Narrator'}
+                    </span>
+                    <span className="tts-segment-count">
+                        {currentSegmentIndex + 1} / {totalSegments}
+                    </span>
+                </div>
+
+                {/* Playback controls */}
+                <div className="tts-buttons">
+                    <button
+                        className="tts-btn tts-btn-small"
+                        onClick={onPrev}
+                        title="Previous segment"
+                        disabled={loading}
+                    >
+                        ⏮
+                    </button>
+
+                    <button
+                        className="tts-btn tts-btn-main"
+                        onClick={onPlayPause}
+                        disabled={loading}
+                        title={playing ? 'Pause' : 'Play'}
+                    >
+                        {loading ? (
+                            <span className="tts-spinner" />
+                        ) : playing ? (
+                            '⏸'
+                        ) : (
+                            '▶'
+                        )}
+                    </button>
+
+                    <button
+                        className="tts-btn tts-btn-small"
+                        onClick={onNext}
+                        title="Next segment"
+                        disabled={loading}
+                    >
+                        ⏭
+                    </button>
+
+                    <button
+                        className="tts-btn tts-btn-small tts-btn-stop"
+                        onClick={onStop}
+                        title="Stop TTS"
+                    >
+                        ⏹
+                    </button>
+                </div>
+
                 {/* Speed control */}
-                <button
-                    className="tts-speed-btn"
-                    onClick={() => {
-                        const speeds = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
-                        const currentIdx = speeds.indexOf(rate);
-                        const nextIdx = (currentIdx + 1) % speeds.length;
-                        onRateChange(speeds[nextIdx]);
-                    }}
-                    title={`Speed: ${rate}x`}
-                >
-                    {rate}x
-                </button>
-
-                {/* Previous */}
-                <button
-                    className="tts-nav-btn"
-                    onClick={onPrev}
-                    disabled={loading || currentSegmentIndex <= 0}
-                    title="Previous sentence"
-                >
-                    ⏮
-                </button>
-
-                {/* Play / Pause */}
-                <button
-                    className="tts-play-btn"
-                    onClick={onPlayPause}
-                    disabled={loading || kokoroLoading}
-                    title={playing ? 'Pause' : 'Play'}
-                >
-                    {loading || kokoroLoading ? (
-                        <span className="tts-spinner" />
-                    ) : playing ? '⏸' : '▶'}
-                </button>
-
-                {/* Next */}
-                <button
-                    className="tts-nav-btn"
-                    onClick={onNext}
-                    disabled={loading || currentSegmentIndex >= totalSegments - 1}
-                    title="Next sentence"
-                >
-                    ⏭
-                </button>
-
-                {/* Segment counter */}
-                <span className="tts-counter">
-                    {currentSegmentIndex >= 0 ? currentSegmentIndex + 1 : 0}/{totalSegments}
-                </span>
+                <div className="tts-speed">
+                    <input
+                        type="range"
+                        className="tts-speed-slider"
+                        min="0.5"
+                        max="2.0"
+                        step="0.1"
+                        value={rate}
+                        onChange={(e) => onRateChange(Number(e.target.value))}
+                    />
+                    <span className="tts-speed-label">{rate.toFixed(1)}x</span>
+                </div>
             </div>
         </div>
     );
