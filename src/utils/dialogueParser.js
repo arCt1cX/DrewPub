@@ -118,13 +118,18 @@ export function parseDialogue(segments) {
     const characters = {}; // { name: { gender, count } }
     const fullText = segments.map(s => s.text).join(' ');
 
-    const enhanced = segments.map((seg, idx) => {
+    // Use a for-loop instead of .map() so we can reference previous results
+    const enhanced = [];
+
+    for (let idx = 0; idx < segments.length; idx++) {
+        const seg = segments[idx];
         const result = { ...seg, segType: seg.segType || 'text', speaker: null, gender: null };
 
         // Skip headings — they're always narration
         if (seg.segType === 'heading') {
             result.segType = 'narration';
-            return result;
+            enhanced.push(result);
+            continue;
         }
 
         // Check if segment contains quoted speech
@@ -139,7 +144,8 @@ export function parseDialogue(segments) {
 
         if (!hasDialogue) {
             result.segType = 'narration';
-            return result;
+            enhanced.push(result);
+            continue;
         }
 
         result.segType = 'dialogue';
@@ -195,8 +201,8 @@ export function parseDialogue(segments) {
             }
         }
 
-        return result;
-    });
+        enhanced.push(result);
+    }
 
     return { segments: enhanced, characters };
 }
