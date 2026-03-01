@@ -30,7 +30,6 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
     const engineRef = useRef(null);
     const abortRef = useRef(null);
     const activeRef = useRef(false);
-    const prefetchCacheRef = useRef(new Map());
     const highlightedElRef = useRef(null);
     const settingsRef = useRef(settings);
 
@@ -136,11 +135,6 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
         // Highlight
         highlightElement(segment.element);
 
-        // Start prefetching next segments (cloud only)
-        if (s.ttsEngine !== 'system') {
-            prefetchSegments(index + 1, 3);
-        }
-
         try {
             setTtsPlaying(true);
             setTtsPaused(false);
@@ -175,35 +169,6 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
             return true; // Skip on error
         }
     }, [getVoiceForSegment, highlightElement]);
-
-    /** Prefetch audio for upcoming segments (cloud engine only) */
-    const prefetchSegments = useCallback((startIdx, count) => {
-        const segments = segmentsRef.current;
-        const s = settingsRef.current;
-        if (s.ttsEngine === 'system') return;
-
-        for (let i = startIdx; i < Math.min(startIdx + count, segments.length); i++) {
-            if (prefetchCacheRef.current.has(i)) continue;
-
-            const seg = segments[i];
-            const voice = getVoiceForSegment(seg);
-
-            // Fire-and-forget prefetch
-            prefetchCacheRef.current.set(i, true); // Mark as in-flight
-            fetch('/api/tts', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    text: seg.text,
-                    voice: voice,
-                    rate: `${Math.round(((s.ttsRate || 1.0) - 1.0) * 100)}%`,
-                    pitch: `${Math.round(((s.ttsPitch || 1.0) - 1.0) * 50)}Hz`,
-                }),
-            }).catch(() => {
-                prefetchCacheRef.current.delete(i);
-            });
-        }
-    }, [getVoiceForSegment]);
 
     /** Main playback loop — plays segments sequentially */
     const playbackLoop = useCallback(async (startIndex = 0) => {
@@ -248,7 +213,6 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
 
             segmentsRef.current = segments;
             setTotalSegments(segments.length);
-            prefetchCacheRef.current.clear();
 
             // Start playing from beginning of new chapter
             playbackLoop(0);
@@ -316,7 +280,6 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
         }
         stopAllEngines();
         clearHighlights();
-        prefetchCacheRef.current.clear();
         setTtsActive(false);
         setTtsPlaying(false);
         setTtsPaused(false);

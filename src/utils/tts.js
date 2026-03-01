@@ -46,12 +46,24 @@ function pitchToEdge(pitch) {
     return `${hz >= 0 ? '+' : ''}${hz}Hz`;
 }
 
-// ─── Cloud Engine (Edge TTS via Cloudflare Function) ─
+// ─── Cloud Engine (Edge TTS via direct browser WebSocket) ─
+
+const TRUSTED_CLIENT_TOKEN = '6A5AA1D4EAFF4E9FB37E23D68491D6F4';
+const EDGE_TTS_WS_URL = 'wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1';
+
+function escapeXml(text) {
+    return text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&apos;');
+}
 
 class CloudTtsEngine {
     constructor() {
         this._audio = null;
-        this._abortController = null;
+        this._ws = null;
         this._playing = false;
         this._paused = false;
     }
@@ -60,83 +72,206 @@ class CloudTtsEngine {
     get isPaused() { return this._paused; }
 
     /**
-     * Synthesize and play text. Returns a promise that resolves when playback ends.
-     * @param {string} text 
+     * Synthesize and play text via Edge TTS WebSocket (direct from browser).
+     * Collects audio chunks, then plays the complete MP3.
+     * @param {string} text
      * @param {string} voice - Edge TTS voice name
-     * @param {object} options - { rate, pitch, onStart, onEnd, signal }
+     * @param {object} options - { rate, pitch, signal }
      * @returns {Promise<void>}
      */
-    async speak(text, voice, options = {}) {
+    speak(text, voice, options = {}) {
         const { rate = 1.0, pitch = 1.0, signal } = options;
 
         this.stop();
 
-        this._abortController = new AbortController();
-        const combinedSignal = signal
-            ? AbortSignal.any?.([signal, this._abortController.signal]) || this._abortController.signal
-            : this._abortController.signal;
-
-        // Fetch audio from CF function
-        const resp = await fetch('/api/tts', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                text,
-                voice: voice || EDGE_VOICES.narrator.female,
-                rate: rateToEdge(rate),
-                pitch: pitchToEdge(pitch),
-            }),
-            signal: combinedSignal,
-        });
-
-        if (!resp.ok) {
-            const err = await resp.json().catch(() => ({ error: 'TTS request failed' }));
-            throw new Error(err.error || `TTS HTTP ${resp.status}`);
-        }
-
-        const audioBlob = await resp.blob();
-        const audioUrl = URL.createObjectURL(audioBlob);
+        const rateStr = rateToEdge(rate);
+        const pitchStr = pitchToEdge(pitch);
+        const voiceName = voice || EDGE_VOICES.narrator.female;
+        const trimmedText = text.slice(0, 3000);
 
         return new Promise((resolve, reject) => {
-            if (combinedSignal.aborted) {
-                URL.revokeObjectURL(audioUrl);
+            if (signal?.aborted) {
                 reject(new DOMException('Aborted', 'AbortError'));
                 return;
             }
 
-            const audio = new Audio(audioUrl);
-            this._audio = audio;
-            this._playing = true;
-            this._paused = false;
+            const connectionId = crypto.randomUUID().replace(/-/g, '');
+            const wsUrl = `${EDGE_TTS_WS_URL}?TrustedClientToken=${TRUSTED_CLIENT_TOKEN}&ConnectionId=${connectionId}`;
 
-            audio.onended = () => {
-                this._playing = false;
-                this._paused = false;
-                URL.revokeObjectURL(audioUrl);
-                this._audio = null;
-                resolve();
+            let ws;
+            try {
+                ws = new WebSocket(wsUrl);
+            } catch (e) {
+                reject(new Error('Failed to create WebSocket: ' + e.message));
+                return;
+            }
+
+            this._ws = ws;
+            ws.binaryType = 'arraybuffer';
+
+            const audioChunks = [];
+            let resolved = false;
+
+            const cleanup = () => {
+                clearTimeout(timeout);
+                if (this._ws === ws) this._ws = null;
+                try { ws.close(); } catch (_) { }
             };
 
-            audio.onerror = (e) => {
-                this._playing = false;
+            const playAudio = () => {
+                if (resolved) return;
+                resolved = true;
+                cleanup();
+
+                if (audioChunks.length === 0) {
+                    reject(new Error('No audio data received from Edge TTS'));
+                    return;
+                }
+
+                // Concatenate chunks
+                let totalLen = 0;
+                for (const c of audioChunks) totalLen += c.byteLength;
+                const merged = new Uint8Array(totalLen);
+                let off = 0;
+                for (const c of audioChunks) { merged.set(c, off); off += c.byteLength; }
+
+                // Create audio element and play
+                const blob = new Blob([merged.buffer], { type: 'audio/mpeg' });
+                const url = URL.createObjectURL(blob);
+                const audio = new Audio(url);
+                this._audio = audio;
+                this._playing = true;
                 this._paused = false;
-                URL.revokeObjectURL(audioUrl);
-                this._audio = null;
-                reject(new Error('Audio playback error'));
+
+                audio.onended = () => {
+                    this._playing = false;
+                    this._paused = false;
+                    URL.revokeObjectURL(url);
+                    this._audio = null;
+                    resolve();
+                };
+
+                audio.onerror = () => {
+                    this._playing = false;
+                    this._paused = false;
+                    URL.revokeObjectURL(url);
+                    this._audio = null;
+                    reject(new Error('Audio playback error'));
+                };
+
+                audio.play().catch((e) => {
+                    this._playing = false;
+                    URL.revokeObjectURL(url);
+                    this._audio = null;
+                    reject(e);
+                });
             };
 
-            const onAbort = () => {
-                audio.pause();
-                audio.src = '';
-                this._playing = false;
-                this._paused = false;
-                URL.revokeObjectURL(audioUrl);
-                this._audio = null;
-                reject(new DOMException('Aborted', 'AbortError'));
+            const fail = (msg) => {
+                if (resolved) return;
+                resolved = true;
+                cleanup();
+                reject(new Error(msg));
             };
-            combinedSignal.addEventListener('abort', onAbort, { once: true });
 
-            audio.play().catch(reject);
+            const timeout = setTimeout(() => {
+                if (!resolved) {
+                    // If we have some audio, try to play it anyway
+                    if (audioChunks.length > 0) {
+                        playAudio();
+                    } else {
+                        fail('Edge TTS request timed out');
+                    }
+                }
+            }, 30000);
+
+            // Abort signal
+            if (signal) {
+                const onAbort = () => {
+                    if (!resolved) {
+                        resolved = true;
+                        cleanup();
+                        reject(new DOMException('Aborted', 'AbortError'));
+                    }
+                };
+                signal.addEventListener('abort', onAbort, { once: true });
+            }
+
+            ws.onopen = () => {
+                // 1. Send speech config
+                ws.send(
+                    'Content-Type:application/json; charset=utf-8\r\n' +
+                    'Path:speech.config\r\n\r\n' +
+                    JSON.stringify({
+                        context: {
+                            synthesis: {
+                                audio: {
+                                    metadataoptions: {
+                                        sentenceBoundaryEnabled: 'false',
+                                        wordBoundaryEnabled: 'false',
+                                    },
+                                    outputFormat: 'audio-24khz-48kbitrate-mono-mp3',
+                                },
+                            },
+                        },
+                    })
+                );
+
+                // 2. Send SSML
+                const ssml =
+                    `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'>` +
+                    `<voice name='${escapeXml(voiceName)}'>` +
+                    `<prosody pitch='${escapeXml(pitchStr)}' rate='${escapeXml(rateStr)}' volume='+0%'>` +
+                    escapeXml(trimmedText) +
+                    `</prosody></voice></speak>`;
+
+                ws.send(
+                    `X-RequestId:${connectionId}\r\n` +
+                    `Content-Type:application/ssml+xml\r\n` +
+                    `X-Timestamp:${new Date().toISOString()}\r\n` +
+                    `Path:ssml\r\n\r\n` +
+                    ssml
+                );
+            };
+
+            ws.onmessage = (event) => {
+                if (resolved) return;
+
+                if (typeof event.data === 'string') {
+                    // Text frame — check for completion
+                    if (event.data.includes('Path:turn.end')) {
+                        playAudio();
+                    }
+                } else if (event.data instanceof ArrayBuffer) {
+                    // Binary frame — extract audio after header
+                    const buffer = event.data;
+                    if (buffer.byteLength < 2) return;
+
+                    try {
+                        const view = new DataView(buffer);
+                        const headerLen = view.getUint16(0);
+                        if (2 + headerLen >= buffer.byteLength) return;
+                        const audioData = new Uint8Array(buffer, 2 + headerLen);
+                        if (audioData.byteLength > 0) {
+                            audioChunks.push(audioData.slice());
+                        }
+                    } catch (_) { /* skip malformed frames */ }
+                }
+            };
+
+            ws.onerror = () => {
+                fail('Edge TTS WebSocket error');
+            };
+
+            ws.onclose = () => {
+                if (!resolved) {
+                    if (audioChunks.length > 0) {
+                        playAudio(); // Graceful close with data
+                    } else {
+                        fail('Edge TTS WebSocket closed without audio');
+                    }
+                }
+            };
         });
     }
 
@@ -155,9 +290,9 @@ class CloudTtsEngine {
     }
 
     stop() {
-        if (this._abortController) {
-            this._abortController.abort();
-            this._abortController = null;
+        if (this._ws) {
+            try { this._ws.close(); } catch (_) { }
+            this._ws = null;
         }
         if (this._audio) {
             this._audio.pause();
