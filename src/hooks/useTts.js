@@ -249,6 +249,15 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
         for (let i = startIndex; i < segmentsRef.current.length; i++) {
             if (stoppedRef.current || !activeRef.current) break;
 
+            // Prefetch next segment while current one plays (cloud engine)
+            if (i + 1 < segmentsRef.current.length && engineRef.current?.prefetch) {
+                const nextSeg = segmentsRef.current[i + 1];
+                const nextVoice = getVoiceForSegment(nextSeg);
+                const rate = settingsRef.current.ttsRate || 1.0;
+                const pitch = settingsRef.current.ttsPitch || 1.0;
+                engineRef.current.prefetch(nextSeg.text, nextVoice, rate, pitch);
+            }
+
             const success = await speakSegment(i);
             if (!success && stoppedRef.current) break;
             if (!success) {
@@ -318,19 +327,19 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
 
     // ── Build voice assignment from characters ──────────────
     const buildVoiceAssignment = useCallback((characters) => {
-        const engineType = settingsRef.current.ttsEngine || 'system';
+        const engineType = settingsRef.current.ttsEngine || 'cloud';
         const presets = VOICE_PRESETS[engineType] || VOICE_PRESETS.system;
 
         const maleVoices = Object.entries(presets)
             .filter(([_, v]) => v.gender === 'male')
-            .map(([key, v]) => ({ id: engineType === 'kokoro' ? v.id : `system-male-${key}`, ...v }));
+            .map(([key, v], i) => ({ id: v.id || `system-male-${i}`, ...v }));
 
         const femaleVoices = Object.entries(presets)
             .filter(([_, v]) => v.gender === 'female')
-            .map(([key, v]) => ({ id: engineType === 'kokoro' ? v.id : `system-female-${key}`, ...v }));
+            .map(([key, v], i) => ({ id: v.id || `system-female-${i}`, ...v }));
 
         const narratorVoice = settingsRef.current.ttsNarratorVoice ||
-            (engineType === 'kokoro' ? presets.narrator?.id : 'system-default');
+            (presets.narrator?.id || 'system-default');
 
         return assignVoicesToCharacters(characters, [...maleVoices, ...femaleVoices], narratorVoice);
     }, []);
@@ -353,9 +362,9 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
                 console.log('[TTS] SpeechSynthesis warmed up on user gesture');
             }
 
-            // HTML Audio element warm-up for Kokoro (iOS requires play() in gesture)
-            const engineType = settingsRef.current.ttsEngine || 'system';
-            if (engineType === 'kokoro') {
+            // HTML Audio element warm-up for Cloud/Kokoro (iOS requires play() in gesture)
+            const engineType = settingsRef.current.ttsEngine || 'cloud';
+            if (engineType === 'cloud' || engineType === 'kokoro') {
                 if (!audioElRef.current) {
                     const el = new Audio();
                     el.volume = 1.0;
@@ -384,8 +393,8 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
                     return;
                 }
 
-                // Pass the pre-warmed audio element to Kokoro engine
-                if (engineType === 'kokoro' && audioElRef.current && engineRef.current?.setAudioElement) {
+                // Pass the pre-warmed audio element to Cloud/Kokoro engine
+                if ((engineType === 'cloud' || engineType === 'kokoro') && audioElRef.current && engineRef.current?.setAudioElement) {
                     engineRef.current.setAudioElement(audioElRef.current);
                 }
             }

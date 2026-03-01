@@ -2,7 +2,8 @@
  * TTS Engine — abstraction layer for speech synthesis.
  * Supports:
  * 1. Web Speech API (system voices) — works offline, available everywhere
- * 2. Kokoro.js (ONNX in-browser) — high quality, requires model download
+ * 2. Cloud (Edge TTS via Cloudflare proxy) — high quality neural voices, no download
+ * 3. Kokoro.js (ONNX in-browser) — high quality, requires heavy model download
  *
  * The engine provides a unified interface for speaking text with different voices.
  */
@@ -16,6 +17,17 @@ export const VOICE_PRESETS = {
         male2: { label: 'Male Voice 2', gender: 'male', style: 'deep' },
         female1: { label: 'Female Voice 1', gender: 'female', style: 'default' },
         female2: { label: 'Female Voice 2', gender: 'female', style: 'warm' },
+    },
+    cloud: {
+        narrator: { id: 'en-US-JennyNeural', label: 'Jenny (Narrator)', gender: 'female', style: 'narrator' },
+        male1: { id: 'en-US-GuyNeural', label: 'Guy', gender: 'male', style: 'newscast' },
+        male2: { id: 'en-US-DavisNeural', label: 'Davis', gender: 'male', style: 'calm' },
+        male3: { id: 'en-US-JasonNeural', label: 'Jason', gender: 'male', style: 'cheerful' },
+        male4: { id: 'en-GB-RyanNeural', label: 'Ryan', gender: 'male', style: 'british' },
+        female1: { id: 'en-US-AriaNeural', label: 'Aria', gender: 'female', style: 'expressive' },
+        female2: { id: 'en-US-SaraNeural', label: 'Sara', gender: 'female', style: 'warm' },
+        female3: { id: 'en-GB-SoniaNeural', label: 'Sonia', gender: 'female', style: 'british' },
+        female4: { id: 'en-US-NancyNeural', label: 'Nancy', gender: 'female', style: 'mature' },
     },
     kokoro: {
         narrator: { id: 'af_heart', label: 'Heart (Narrator)', gender: 'female', style: 'narrator' },
@@ -548,22 +560,231 @@ class KokoroTTSEngine {
     }
 }
 
+// ─── Cloud TTS Engine (Edge TTS via Cloudflare proxy) ───
+
+class CloudTTSEngine {
+    constructor() {
+        this._audioElement = null;
+        this._currentBlobUrl = null;
+        this._ready = false;
+        this._stopped = false;
+        this._paused = false;
+        this._endResolve = null;
+        this._prefetchCache = new Map(); // text|voice → Promise<Blob>
+        this.onBoundary = null;
+        this.onEnd = null;
+        this.onError = null;
+    }
+
+    async init() {
+        // No heavy initialization — just mark ready
+        this._ready = true;
+        console.log('[Cloud TTS] Engine ready (Edge TTS via Cloudflare)');
+        return true;
+    }
+
+    get isReady() { return this._ready; }
+    get isLoading() { return false; }
+
+    setAudioElement(el) {
+        this._audioElement = el;
+        console.log('[Cloud TTS] Audio element set (pre-warmed)');
+    }
+
+    getAvailableVoices() {
+        return Object.entries(VOICE_PRESETS.cloud).map(([key, preset]) => ({
+            id: preset.id,
+            name: preset.label,
+            gender: preset.gender,
+            style: preset.style,
+        }));
+    }
+
+    /**
+     * Pre-fetch audio for a segment (called while current segment plays).
+     */
+    prefetch(text, voiceId, rate = 1.0, pitch = 1.0) {
+        if (!text?.trim()) return;
+        const key = `${text}|${voiceId}`;
+        if (!this._prefetchCache.has(key)) {
+            this._prefetchCache.set(key, this._fetchAudio(text, voiceId, rate, pitch));
+        }
+    }
+
+    async _fetchAudio(text, voiceId, rate, pitch) {
+        const ratePercent = Math.round((rate - 1) * 100);
+        const pitchHz = Math.round((pitch - 1) * 50);
+
+        const response = await fetch('/api/tts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                text,
+                voice: voiceId || 'en-US-JennyNeural',
+                rate: ratePercent,
+                pitch: pitchHz,
+            }),
+        });
+
+        if (!response.ok) {
+            const errBody = await response.text().catch(() => '');
+            throw new Error(`TTS API error ${response.status}: ${errBody}`);
+        }
+
+        return response.blob();
+    }
+
+    async speak(text, voiceId, rate = 1.0, pitch = 1.0) {
+        if (!text?.trim()) return;
+        this._stopped = false;
+        this._paused = false;
+
+        try {
+            console.log('[Cloud TTS] Requesting:', text.substring(0, 50) + '...');
+
+            // Check prefetch cache first
+            const key = `${text}|${voiceId}`;
+            let audioBlob;
+            if (this._prefetchCache.has(key)) {
+                audioBlob = await this._prefetchCache.get(key);
+                this._prefetchCache.delete(key);
+                console.log('[Cloud TTS] Using prefetched audio');
+            } else {
+                audioBlob = await this._fetchAudio(text, voiceId, rate, pitch);
+            }
+
+            if (this._stopped) return;
+            if (!audioBlob || audioBlob.size === 0) {
+                console.warn('[Cloud TTS] Empty audio received');
+                return;
+            }
+
+            console.log(`[Cloud TTS] Audio: ${(audioBlob.size / 1024).toFixed(1)}KB`);
+
+            // Create blob URL for playback
+            if (this._currentBlobUrl) URL.revokeObjectURL(this._currentBlobUrl);
+            this._currentBlobUrl = URL.createObjectURL(audioBlob);
+
+            if (!this._audioElement) {
+                console.warn('[Cloud TTS] No pre-warmed audio element, creating fallback');
+                this._audioElement = new Audio();
+            }
+
+            const el = this._audioElement;
+            el.src = this._currentBlobUrl;
+
+            // Wait if paused
+            if (this._paused) {
+                await new Promise(resolve => { this._endResolve = resolve; });
+                if (this._stopped) return;
+            }
+
+            return new Promise((resolve, reject) => {
+                const onEnded = () => {
+                    cleanup();
+                    if (this.onEnd && !this._stopped) this.onEnd();
+                    resolve();
+                };
+                const onError = (e) => {
+                    cleanup();
+                    console.error('[Cloud TTS] Playback error:', e);
+                    if (this.onError && !this._stopped) this.onError(e);
+                    reject(new Error('Audio playback failed'));
+                };
+                const cleanup = () => {
+                    el.removeEventListener('ended', onEnded);
+                    el.removeEventListener('error', onError);
+                };
+
+                el.addEventListener('ended', onEnded, { once: true });
+                el.addEventListener('error', onError, { once: true });
+
+                console.log('[Cloud TTS] Playing...');
+                const playPromise = el.play();
+                if (playPromise) {
+                    playPromise.catch(err => {
+                        console.error('[Cloud TTS] play() rejected:', err);
+                        cleanup();
+                        reject(err);
+                    });
+                }
+            });
+        } catch (err) {
+            if (this._stopped) return;
+            console.error('[Cloud TTS] Error:', err);
+            if (this.onError) this.onError(err);
+            throw err;
+        }
+    }
+
+    pause() {
+        this._paused = true;
+        if (this._audioElement && !this._audioElement.paused) {
+            this._audioElement.pause();
+        }
+    }
+
+    resume() {
+        this._paused = false;
+        if (this._endResolve) {
+            this._endResolve();
+            this._endResolve = null;
+        }
+        if (this._audioElement?.paused && this._audioElement.src) {
+            this._audioElement.play().catch(() => {});
+        }
+    }
+
+    stop() {
+        this._stopped = true;
+        this._paused = false;
+        if (this._endResolve) {
+            this._endResolve();
+            this._endResolve = null;
+        }
+        if (this._audioElement) {
+            this._audioElement.pause();
+            this._audioElement.currentTime = 0;
+        }
+    }
+
+    get speaking() {
+        return this._audioElement ? !this._audioElement.paused : false;
+    }
+
+    get paused() {
+        return this._paused;
+    }
+
+    destroy() {
+        this.stop();
+        this._prefetchCache.clear();
+        if (this._currentBlobUrl) {
+            URL.revokeObjectURL(this._currentBlobUrl);
+            this._currentBlobUrl = null;
+        }
+        if (this._audioElement) {
+            this._audioElement.pause();
+            this._audioElement.removeAttribute('src');
+            this._audioElement = null;
+        }
+        this._ready = false;
+        this.onBoundary = null;
+        this.onEnd = null;
+        this.onError = null;
+    }
+}
+
 // ─── Engine Factory ─────────────────────────────────────
 
 /**
  * Create a TTS engine based on the specified type.
- * @param {'system'|'kokoro'|'auto'} type
- * @returns {SystemTTSEngine|KokoroTTSEngine}
+ * @param {'system'|'cloud'|'kokoro'} type
+ * @returns {SystemTTSEngine|CloudTTSEngine|KokoroTTSEngine}
  */
-export function createTTSEngine(type = 'system') {
-    if (type === 'kokoro') {
-        return new KokoroTTSEngine();
-    }
-    if (type === 'auto') {
-        // Try Kokoro first, fall back to system
-        // For now, default to system since Kokoro requires explicit download
-        return new SystemTTSEngine();
-    }
+export function createTTSEngine(type = 'cloud') {
+    if (type === 'cloud') return new CloudTTSEngine();
+    if (type === 'kokoro') return new KokoroTTSEngine();
     return new SystemTTSEngine();
 }
 
@@ -572,7 +793,6 @@ export function createTTSEngine(type = 'system') {
  */
 export async function isKokoroModelCached() {
     try {
-        // Check if the model files are in the browser's Cache API
         const cache = await caches.open('transformers-cache');
         const keys = await cache.keys();
         return keys.some(k => k.url.includes('Kokoro'));
@@ -597,6 +817,5 @@ export function getVoiceForCharacter(engineType, gender, characterIndex = 0) {
         return maleKeys[characterIndex % maleKeys.length] || voiceKeys[0];
     }
 
-    // Default to narrator
     return 'narrator';
 }

@@ -255,7 +255,13 @@ export default function SettingsPanel({ onClose }) {
                         {/* Engine selector */}
                         <div className="toggle-group">
                             <button
-                                className={`toggle-btn ${(settings.ttsEngine || 'system') === 'system' ? 'active' : ''}`}
+                                className={`toggle-btn ${(settings.ttsEngine || 'cloud') === 'cloud' ? 'active' : ''}`}
+                                onClick={() => updateSetting('ttsEngine', 'cloud')}
+                            >
+                                ☁️ Cloud
+                            </button>
+                            <button
+                                className={`toggle-btn ${(settings.ttsEngine) === 'system' ? 'active' : ''}`}
                                 onClick={() => updateSetting('ttsEngine', 'system')}
                             >
                                 🗣 System
@@ -264,14 +270,22 @@ export default function SettingsPanel({ onClose }) {
                                 className={`toggle-btn ${settings.ttsEngine === 'kokoro' ? 'active' : ''}`}
                                 onClick={() => updateSetting('ttsEngine', 'kokoro')}
                             >
-                                🤖 Kokoro AI
+                                🤖 Kokoro
                             </button>
                         </div>
+
+                        {(settings.ttsEngine || 'cloud') === 'cloud' && (
+                            <div className="tts-kokoro-info">
+                                <span className="slider-label" style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                                    ☁️ High-quality Microsoft Neural voices via Cloudflare (requires internet)
+                                </span>
+                            </div>
+                        )}
 
                         {settings.ttsEngine === 'kokoro' && (
                             <div className="tts-kokoro-info">
                                 <span className="slider-label" style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-                                    ℹ️ Kokoro requires ~87MB model download (cached for offline use)
+                                    ⚠️ Kokoro requires ~87MB download and powerful device. Prefer Cloud for best results.
                                 </span>
                             </div>
                         )}
@@ -291,7 +305,7 @@ export default function SettingsPanel({ onClose }) {
                         </div>
 
                         {/* Pitch (system engine only) */}
-                        {(settings.ttsEngine || 'system') === 'system' && (
+                        {(settings.ttsEngine) === 'system' && (
                             <div className="slider-row">
                                 <span className="slider-label">Pitch</span>
                                 <input
