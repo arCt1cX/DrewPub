@@ -560,7 +560,155 @@ class KokoroTTSEngine {
     }
 }
 
-// ─── Cloud TTS Engine (Edge TTS via Cloudflare proxy) ───
+// ─── Edge TTS Helper Functions ──────────────────────────
+
+const EDGE_TTS_TOKEN = '6A5AA1D4EAFF4E9FB37E23D68491D6F4';
+const EDGE_TTS_URL = 'wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1';
+
+function _escapeXml(text) {
+    return text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
+function _makeTimestamp() {
+    return new Date().toISOString();
+}
+
+function _makeConfigPayload(outputFormat) {
+    return [
+        `X-Timestamp:${_makeTimestamp()}`,
+        'Content-Type:application/json; charset=utf-8',
+        'Path:speech.config',
+        '',
+        JSON.stringify({
+            context: {
+                synthesis: {
+                    audio: {
+                        metadataoptions: {
+                            sentenceBoundaryEnabled: 'false',
+                            wordBoundaryEnabled: 'true',
+                        },
+                        outputFormat,
+                    },
+                },
+            },
+        }),
+    ].join('\r\n');
+}
+
+function _makeSsmlPayload(requestId, text, voice, rate, pitch) {
+    const rateStr = rate >= 0 ? `+${rate}%` : `${rate}%`;
+    const pitchStr = pitch >= 0 ? `+${pitch}Hz` : `${pitch}Hz`;
+
+    const ssml = `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'>` +
+        `<voice name='${voice}'>` +
+        `<prosody pitch='${pitchStr}' rate='${rateStr}' volume='+0%'>` +
+        `${_escapeXml(text)}` +
+        `</prosody></voice></speak>`;
+
+    return [
+        `X-RequestId:${requestId}`,
+        'Content-Type:application/ssml+xml',
+        `X-Timestamp:${_makeTimestamp()}`,
+        'Path:ssml',
+        '',
+        ssml,
+    ].join('\r\n');
+}
+
+/**
+ * Synthesize text to MP3 audio via Edge TTS WebSocket (direct from browser).
+ * Returns a Blob of audio/mpeg.
+ */
+async function edgeTtsSynthesize(text, voice, rate = 0, pitch = 0) {
+    const connectionId = crypto.randomUUID().replace(/-/g, '');
+    const requestId = crypto.randomUUID().replace(/-/g, '');
+    const wsUrl = `${EDGE_TTS_URL}?TrustedClientToken=${EDGE_TTS_TOKEN}&ConnectionId=${connectionId}`;
+    const outputFormat = 'audio-24khz-48kbitrate-mono-mp3';
+
+    return new Promise((resolve, reject) => {
+        let ws;
+        try {
+            ws = new WebSocket(wsUrl);
+        } catch (e) {
+            reject(new Error(`WebSocket creation failed: ${e.message}`));
+            return;
+        }
+
+        ws.binaryType = 'arraybuffer';
+        const audioChunks = [];
+
+        const timeout = setTimeout(() => {
+            try { ws.close(); } catch (_) {}
+            if (audioChunks.length > 0) {
+                resolve(_concatChunks(audioChunks));
+            } else {
+                reject(new Error('Edge TTS timeout (30s)'));
+            }
+        }, 30000);
+
+        ws.onopen = () => {
+            ws.send(_makeConfigPayload(outputFormat));
+            ws.send(_makeSsmlPayload(requestId, text, voice, rate, pitch));
+        };
+
+        ws.onmessage = (event) => {
+            if (typeof event.data === 'string') {
+                if (event.data.includes('Path:turn.end')) {
+                    clearTimeout(timeout);
+                    try { ws.close(); } catch (_) {}
+                    resolve(_concatChunks(audioChunks));
+                }
+            } else {
+                // Binary: 2-byte header length, then text header, then audio
+                const data = event.data; // ArrayBuffer
+                if (data.byteLength < 2) return;
+
+                const view = new DataView(data);
+                const headerLen = view.getUint16(0);
+                if (2 + headerLen >= data.byteLength) return;
+
+                // Check if this is an audio chunk
+                const headerBytes = new Uint8Array(data, 2, headerLen);
+                const headerText = new TextDecoder('ascii').decode(headerBytes);
+
+                if (headerText.includes('Path:audio')) {
+                    audioChunks.push(data.slice(2 + headerLen));
+                }
+            }
+        };
+
+        ws.onerror = (e) => {
+            clearTimeout(timeout);
+            console.error('[Edge TTS] WebSocket error:', e);
+            reject(new Error('Edge TTS WebSocket error'));
+        };
+
+        ws.onclose = () => {
+            clearTimeout(timeout);
+            // If we haven't resolved/rejected yet
+            if (audioChunks.length > 0) {
+                resolve(_concatChunks(audioChunks));
+            }
+        };
+    });
+}
+
+function _concatChunks(chunks) {
+    const total = chunks.reduce((s, c) => s + c.byteLength, 0);
+    const result = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+        result.set(new Uint8Array(chunk), offset);
+        offset += chunk.byteLength;
+    }
+    return new Blob([result], { type: 'audio/mpeg' });
+}
+
+// ─── Cloud TTS Engine (Edge TTS — direct browser WebSocket) ───
 
 class CloudTTSEngine {
     constructor() {
@@ -577,9 +725,8 @@ class CloudTTSEngine {
     }
 
     async init() {
-        // No heavy initialization — just mark ready
         this._ready = true;
-        console.log('[Cloud TTS] Engine ready (Edge TTS via Cloudflare)');
+        console.log('[Cloud TTS] Engine ready (Edge TTS direct WebSocket)');
         return true;
     }
 
@@ -601,37 +748,20 @@ class CloudTTSEngine {
     }
 
     /**
-     * Pre-fetch audio for a segment (called while current segment plays).
+     * Pre-fetch audio for the next segment while the current one plays.
      */
     prefetch(text, voiceId, rate = 1.0, pitch = 1.0) {
         if (!text?.trim()) return;
         const key = `${text}|${voiceId}`;
         if (!this._prefetchCache.has(key)) {
-            this._prefetchCache.set(key, this._fetchAudio(text, voiceId, rate, pitch));
+            const ratePercent = Math.round((rate - 1) * 100);
+            const pitchHz = Math.round((pitch - 1) * 50);
+            this._prefetchCache.set(
+                key,
+                edgeTtsSynthesize(text, voiceId || 'en-US-JennyNeural', ratePercent, pitchHz)
+                    .catch(err => { console.warn('[Cloud TTS] Prefetch failed:', err.message); return null; })
+            );
         }
-    }
-
-    async _fetchAudio(text, voiceId, rate, pitch) {
-        const ratePercent = Math.round((rate - 1) * 100);
-        const pitchHz = Math.round((pitch - 1) * 50);
-
-        const response = await fetch('/api/tts', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                text,
-                voice: voiceId || 'en-US-JennyNeural',
-                rate: ratePercent,
-                pitch: pitchHz,
-            }),
-        });
-
-        if (!response.ok) {
-            const errBody = await response.text().catch(() => '');
-            throw new Error(`TTS API error ${response.status}: ${errBody}`);
-        }
-
-        return response.blob();
     }
 
     async speak(text, voiceId, rate = 1.0, pitch = 1.0) {
@@ -640,7 +770,10 @@ class CloudTTSEngine {
         this._paused = false;
 
         try {
-            console.log('[Cloud TTS] Requesting:', text.substring(0, 50) + '...');
+            console.log('[Cloud TTS] Synthesizing:', text.substring(0, 50) + '...');
+
+            const ratePercent = Math.round((rate - 1) * 100);
+            const pitchHz = Math.round((pitch - 1) * 50);
 
             // Check prefetch cache first
             const key = `${text}|${voiceId}`;
@@ -648,9 +781,16 @@ class CloudTTSEngine {
             if (this._prefetchCache.has(key)) {
                 audioBlob = await this._prefetchCache.get(key);
                 this._prefetchCache.delete(key);
-                console.log('[Cloud TTS] Using prefetched audio');
-            } else {
-                audioBlob = await this._fetchAudio(text, voiceId, rate, pitch);
+                if (audioBlob) console.log('[Cloud TTS] Using prefetched audio');
+            }
+
+            if (!audioBlob) {
+                audioBlob = await edgeTtsSynthesize(
+                    text,
+                    voiceId || 'en-US-JennyNeural',
+                    ratePercent,
+                    pitchHz
+                );
             }
 
             if (this._stopped) return;
