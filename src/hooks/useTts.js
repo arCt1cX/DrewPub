@@ -243,47 +243,67 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
         setTtsPlaying(true);
         setTtsPaused(false);
 
+        let consecutiveFailures = 0;
+        const MAX_FAILURES = 3;
+
         for (let i = startIndex; i < segmentsRef.current.length; i++) {
             if (stoppedRef.current || !activeRef.current) break;
 
             const success = await speakSegment(i);
             if (!success && stoppedRef.current) break;
-            if (!success) continue; // Skip failed segments
+            if (!success) {
+                consecutiveFailures++;
+                console.warn(`[TTS] Segment ${i} failed (${consecutiveFailures}/${MAX_FAILURES})`);
+                if (consecutiveFailures >= MAX_FAILURES) {
+                    console.error('[TTS] Too many consecutive failures, stopping playback');
+                    stoppedRef.current = true;
+                    break;
+                }
+                // Small delay before trying next segment
+                await new Promise(r => setTimeout(r, 200));
+                continue;
+            }
+            consecutiveFailures = 0; // Reset on success
         }
 
         // If we reached the end of all segments without being stopped
-        if (!stoppedRef.current && activeRef.current) {
+        if (!stoppedRef.current && activeRef.current && consecutiveFailures < MAX_FAILURES) {
             // Check if we should auto-advance to next chapter
             if (settingsRef.current.ttsAutoAdvance) {
                 const rendition = renditionRef.current;
                 if (rendition) {
                     clearHighlights();
+                    console.log('[TTS] Auto-advancing to next chapter...');
 
                     // Move to next chapter/page
                     await rendition.next();
 
                     // Wait for the new chapter to load
-                    await new Promise(resolve => setTimeout(resolve, 800));
+                    await new Promise(resolve => setTimeout(resolve, 1000));
 
                     // Re-extract text from new chapter and continue
                     const doc = getIframeDoc();
                     if (doc && activeRef.current && !stoppedRef.current) {
                         const blocks = extractChapterText(doc);
-                        const rawSegments = createTtsSegments(blocks);
-                        const parsed = parseDialogue(rawSegments);
+                        if (blocks.length === 0) {
+                            console.warn('[TTS] New chapter has no text, stopping');
+                        } else {
+                            const rawSegments = createTtsSegments(blocks);
+                            const parsed = parseDialogue(rawSegments);
 
-                        segmentsRef.current = parsed.segments;
-                        parsedDataRef.current = parsed;
-                        setTotalSegments(parsed.segments.length);
+                            segmentsRef.current = parsed.segments;
+                            parsedDataRef.current = parsed;
+                            setTotalSegments(parsed.segments.length);
 
-                        // Update voice assignments with new characters
-                        if (parsed.characters) {
-                            Object.assign(voiceAssignmentRef.current, buildVoiceAssignment(parsed.characters));
+                            // Update voice assignments with new characters
+                            if (parsed.characters) {
+                                Object.assign(voiceAssignmentRef.current, buildVoiceAssignment(parsed.characters));
+                            }
+
+                            // Continue playing from start of new chapter
+                            playFromIndex(0);
+                            return;
                         }
-
-                        // Continue playing from start of new chapter
-                        playFromIndex(0);
-                        return;
                     }
                 }
             }
@@ -321,6 +341,16 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
         setTtsLoading(true);
 
         try {
+            // Warm up SpeechSynthesis on user gesture (Chrome/Safari requirement)
+            // Must happen synchronously within the click handler
+            if (window.speechSynthesis) {
+                const warmUp = new SpeechSynthesisUtterance('');
+                warmUp.volume = 0;
+                window.speechSynthesis.speak(warmUp);
+                window.speechSynthesis.cancel();
+                console.log('[TTS] SpeechSynthesis warmed up on user gesture');
+            }
+
             // Initialize engine if needed
             if (!engineRef.current || !engineRef.current.isReady) {
                 const engineType = settingsRef.current.ttsEngine || 'system';

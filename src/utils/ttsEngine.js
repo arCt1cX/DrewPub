@@ -46,25 +46,33 @@ class SystemTTSEngine {
 
     async init() {
         return new Promise((resolve) => {
+            let resolved = false;
             const loadVoices = () => {
                 this.voices = this.synth.getVoices();
-                if (this.voices.length > 0) {
+                console.log(`[TTS] Voices loaded: ${this.voices.length}`);
+                if (this.voices.length > 0 && !resolved) {
+                    resolved = true;
                     this._categorizeVoices();
+                    console.log(`[TTS] Voice categories — Male: ${this._voiceMap.male?.length}, Female: ${this._voiceMap.female?.length}, All: ${this._voiceMap.all?.length}`);
                     this._ready = true;
                     resolve(true);
                 }
             };
 
             loadVoices();
-            if (this.voices.length === 0) {
+            if (!resolved) {
                 this.synth.onvoiceschanged = () => {
                     loadVoices();
                 };
                 // Timeout fallback
                 setTimeout(() => {
-                    if (!this._ready) {
+                    if (!resolved) {
                         loadVoices();
-                        resolve(this.voices.length > 0);
+                        if (!resolved) {
+                            console.warn('[TTS] No voices found after timeout');
+                            resolved = true;
+                            resolve(false);
+                        }
                     }
                 }, 2000);
             }
@@ -136,15 +144,24 @@ class SystemTTSEngine {
         return presets;
     }
 
-    speak(text, voiceId, rate = 1.0, pitch = 1.0) {
+    async speak(text, voiceId, rate = 1.0, pitch = 1.0) {
+        if (!this.synth) {
+            throw new Error('Speech synthesis not available');
+        }
+
+        if (!text || text.trim().length === 0) {
+            console.warn('[TTS] Empty text, skipping');
+            return;
+        }
+
+        // Cancel any currently speaking utterance with a delay
+        // Chrome bug: cancel() + speak() without delay cancels the new utterance too
+        if (this.synth.speaking || this.synth.pending) {
+            this.synth.cancel();
+            await new Promise(r => setTimeout(r, 100));
+        }
+
         return new Promise((resolve, reject) => {
-            if (!this.synth) {
-                reject(new Error('Speech synthesis not available'));
-                return;
-            }
-
-            this.stop();
-
             const utterance = new SpeechSynthesisUtterance(text);
             utterance.rate = Math.max(0.1, Math.min(3.0, rate));
             utterance.pitch = Math.max(0.1, Math.min(2.0, pitch));
@@ -154,40 +171,60 @@ class SystemTTSEngine {
             const voicePreset = this.getAvailableVoices().find(v => v.id === voiceId);
             if (voicePreset?.systemVoice) {
                 utterance.voice = voicePreset.systemVoice;
-            } else if (this._voiceMap.all.length > 0) {
+            } else if (this._voiceMap.all?.length > 0) {
                 utterance.voice = this._voiceMap.all[0];
             }
+            // If no voice found at all, don't set .voice — browser uses default
+
+            console.log('[TTS] Speaking:', text.substring(0, 50) + '...', 'voice:', utterance.voice?.name || 'default');
+
+            let resolved = false;
 
             utterance.onboundary = (event) => {
                 if (this.onBoundary) {
                     this.onBoundary({
                         charIndex: event.charIndex,
                         charLength: event.charLength || 0,
-                        name: event.name, // 'word' or 'sentence'
+                        name: event.name,
                     });
                 }
             };
 
             utterance.onend = () => {
+                if (resolved) return;
+                resolved = true;
                 this.currentUtterance = null;
                 if (this.onEnd) this.onEnd();
                 resolve();
             };
 
             utterance.onerror = (event) => {
+                if (resolved) return;
+                resolved = true;
                 this.currentUtterance = null;
+                console.warn('[TTS] Utterance error:', event.error);
                 if (event.error === 'interrupted' || event.error === 'canceled') {
-                    resolve(); // Not a real error
+                    resolve(); // Not a real error — user stopped it
                 } else {
                     if (this.onError) this.onError(event);
-                    reject(event);
+                    reject(new Error(`TTS error: ${event.error}`));
                 }
             };
 
             this.currentUtterance = utterance;
             this.synth.speak(utterance);
 
-            // iOS Safari fix: speechSynthesis can pause itself
+            // Safety: if nothing happens after 10 seconds, resolve anyway
+            setTimeout(() => {
+                if (!resolved && !this.synth.speaking) {
+                    console.warn('[TTS] Utterance timed out, advancing');
+                    resolved = true;
+                    this.currentUtterance = null;
+                    resolve();
+                }
+            }, Math.max(10000, text.length * 100));
+
+            // iOS Safari fix: speechSynthesis can pause itself after ~15 seconds
             this._iosKeepAlive();
         });
     }
@@ -262,17 +299,21 @@ class KokoroTTSEngine {
         this._loading = true;
 
         try {
-            // Dynamic import — only downloaded when user activates Kokoro
+            console.log('[Kokoro] Importing kokoro-js module...');
             const { KokoroTTS } = await import('kokoro-js');
+            console.log('[Kokoro] Module loaded, downloading model (this may take a minute)...');
             this._kokoro = await KokoroTTS.from_pretrained(
                 'onnx-community/Kokoro-82M-v1.0-ONNX',
                 { dtype: 'q8' } // Quantized for smaller size + faster on mobile
             );
+            console.log('[Kokoro] Model loaded successfully!');
             this._ready = true;
             this._loading = false;
             return true;
         } catch (err) {
-            console.error('Failed to load Kokoro:', err);
+            console.error('[Kokoro] Failed to load:', err);
+            console.error('[Kokoro] This may be due to missing Cross-Origin-Isolation headers.');
+            console.error('[Kokoro] Falling back to system TTS.');
             this._loading = false;
             return false;
         }
@@ -297,15 +338,18 @@ class KokoroTTSEngine {
 
     async speak(text, voiceId, rate = 1.0) {
         if (!this._kokoro) throw new Error('Kokoro not initialized');
+        if (!text || text.trim().length === 0) return;
         this._stopped = false;
         this._paused = false;
 
         try {
+            console.log('[Kokoro] Generating audio for:', text.substring(0, 50) + '...');
             // Generate audio
             const audio = await this._kokoro.generate(text, {
                 voice: voiceId || 'af_heart',
                 speed: rate,
             });
+            console.log('[Kokoro] Audio generated, playing...');
 
             if (this._stopped) return;
 
