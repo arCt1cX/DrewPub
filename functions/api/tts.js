@@ -1,11 +1,11 @@
 /**
  * Cloudflare Pages Function — Edge TTS Proxy
- * Uses outbound WebSocket (new WebSocket() — standard Web API supported by CF Workers)
- * to connect to Microsoft Edge Read Aloud service and return MP3 audio.
+ * Uses CF Workers outbound WebSocket via fetch() + Upgrade header.
+ * This allows setting custom Origin header required by Edge TTS.
  */
 
 const TRUSTED_CLIENT_TOKEN = '6A5AA1D4EAFF4E9FB37E23D68491D6F4';
-const WS_URL = 'wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1';
+const WS_ENDPOINT = 'https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1';
 
 const CORS = {
     'Access-Control-Allow-Origin': '*',
@@ -20,6 +20,13 @@ function escapeXml(text) {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&apos;');
+}
+
+function jsonResponse(data, status = 200) {
+    return new Response(JSON.stringify(data), {
+        status,
+        headers: { 'Content-Type': 'application/json', ...CORS },
+    });
 }
 
 export async function onRequestOptions() {
@@ -37,14 +44,11 @@ export async function onRequestPost(context) {
         } = body;
 
         if (!text || text.trim().length === 0) {
-            return new Response(JSON.stringify({ error: 'Text is required' }), {
-                status: 400,
-                headers: { 'Content-Type': 'application/json', ...CORS },
-            });
+            return jsonResponse({ error: 'Text is required' }, 400);
         }
 
         const trimmedText = text.slice(0, 3000);
-        const audioBuffer = await synthesizeWithEdgeTts(trimmedText, voice, rate, pitch);
+        const audioBuffer = await synthesize(trimmedText, voice, rate, pitch);
 
         return new Response(audioBuffer, {
             headers: {
@@ -54,166 +58,163 @@ export async function onRequestPost(context) {
                 ...CORS,
             },
         });
-    } catch (error) {
-        // Return detailed error for debugging
-        return new Response(JSON.stringify({
-            error: error.message || 'TTS synthesis failed',
-            type: error.constructor?.name || 'Error',
-        }), {
-            status: 500,
-            headers: { 'Content-Type': 'application/json', ...CORS },
-        });
+    } catch (err) {
+        return jsonResponse({
+            error: err.message || 'TTS synthesis failed',
+            type: err.constructor?.name || 'Error',
+        }, 500);
     }
 }
 
-function synthesizeWithEdgeTts(text, voice, rate, pitch) {
+/**
+ * Connect to Edge TTS via CF Workers outbound WebSocket.
+ *
+ * CF Workers establish outbound WebSocket with:
+ *   const resp = await fetch(httpsUrl, { headers: { Upgrade: 'websocket', ... } });
+ *   const ws = resp.webSocket;
+ *   ws.accept();
+ *
+ * This lets us set the required Origin header (unlike new WebSocket()).
+ */
+async function synthesize(text, voice, rate, pitch) {
+    const connectionId = crypto.randomUUID().replace(/-/g, '');
+    const url = `${WS_ENDPOINT}?TrustedClientToken=${TRUSTED_CLIENT_TOKEN}&ConnectionId=${connectionId}`;
+
+    // Step 1: Establish WebSocket via fetch() — lets us send custom headers
+    const upgradeResp = await fetch(url, {
+        headers: {
+            'Upgrade': 'websocket',
+            'Origin': 'chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0',
+        },
+    });
+
+    const ws = upgradeResp.webSocket;
+    if (!ws) {
+        // Capture as much diagnostic info as possible
+        let body = '';
+        try { body = await upgradeResp.text(); } catch (_) {}
+        throw new Error(
+            `WebSocket upgrade failed: HTTP ${upgradeResp.status} ${upgradeResp.statusText}` +
+            (body ? ` — ${body.slice(0, 200)}` : '')
+        );
+    }
+
+    ws.accept();
+
+    // Step 2: Collect audio in a Promise
     return new Promise((resolve, reject) => {
-        const connectionId = crypto.randomUUID().replace(/-/g, '');
-        const wsUrl = `${WS_URL}?TrustedClientToken=${TRUSTED_CLIENT_TOKEN}&ConnectionId=${connectionId}`;
-
-        let ws;
-        try {
-            ws = new WebSocket(wsUrl);
-        } catch (e) {
-            reject(new Error(`WebSocket constructor failed: ${e.message}`));
-            return;
-        }
-
         const audioChunks = [];
-        let resolved = false;
+        let done = false;
 
         const timeout = setTimeout(() => {
-            if (resolved) return;
-            resolved = true;
-            try { ws.close(); } catch (_) { }
+            if (done) return;
+            done = true;
+            try { ws.close(); } catch (_) {}
             if (audioChunks.length > 0) {
-                resolve(concatenateChunks(audioChunks));
+                resolve(concat(audioChunks));
             } else {
-                reject(new Error('Edge TTS timeout after 25s — no audio received'));
+                reject(new Error('Edge TTS timeout (25 s) — no audio received'));
             }
-        }, 25000);
+        }, 25_000);
 
-        const finishWithAudio = () => {
-            if (resolved) return;
-            resolved = true;
+        const finish = () => {
+            if (done) return;
+            done = true;
             clearTimeout(timeout);
-            try { ws.close(); } catch (_) { }
+            try { ws.close(); } catch (_) {}
             if (audioChunks.length === 0) {
-                reject(new Error('Empty audio — no chunks received'));
-                return;
+                reject(new Error('Edge TTS returned empty audio'));
+            } else {
+                resolve(concat(audioChunks));
             }
-            resolve(concatenateChunks(audioChunks));
         };
 
-        ws.addEventListener('open', () => {
-            try {
-                // 1. Send speech config
-                ws.send(
-                    'Content-Type:application/json; charset=utf-8\r\n' +
-                    'Path:speech.config\r\n\r\n' +
-                    JSON.stringify({
-                        context: {
-                            synthesis: {
-                                audio: {
-                                    metadataoptions: {
-                                        sentenceBoundaryEnabled: 'false',
-                                        wordBoundaryEnabled: 'false',
-                                    },
-                                    outputFormat: 'audio-24khz-48kbitrate-mono-mp3',
-                                },
-                            },
-                        },
-                    })
-                );
-
-                // 2. Send SSML
-                const ssml =
-                    `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'>` +
-                    `<voice name='${escapeXml(voice)}'>` +
-                    `<prosody pitch='${escapeXml(pitch)}' rate='${escapeXml(rate)}' volume='+0%'>` +
-                    escapeXml(text) +
-                    `</prosody></voice></speak>`;
-
-                ws.send(
-                    `X-RequestId:${connectionId}\r\n` +
-                    `Content-Type:application/ssml+xml\r\n` +
-                    `X-Timestamp:${new Date().toISOString()}\r\n` +
-                    `Path:ssml\r\n\r\n` +
-                    ssml
-                );
-            } catch (e) {
-                if (!resolved) {
-                    resolved = true;
-                    clearTimeout(timeout);
-                    reject(new Error(`Send failed: ${e.message}`));
-                }
-            }
-        });
-
         ws.addEventListener('message', (event) => {
-            if (resolved) return;
+            if (done) return;
 
             if (typeof event.data === 'string') {
-                // Text frame — check for completion signal
                 if (event.data.includes('Path:turn.end')) {
-                    finishWithAudio();
+                    finish();
                 }
-            } else {
-                // Binary frame — extract audio data after header
-                try {
-                    let buffer;
-                    if (event.data instanceof ArrayBuffer) {
-                        buffer = event.data;
-                    } else if (event.data.arrayBuffer) {
-                        // Blob-like: skip (shouldn't happen in CF Workers)
-                        return;
-                    } else {
-                        return;
-                    }
-
-                    if (buffer.byteLength < 2) return;
-
-                    const view = new DataView(buffer);
-                    const headerLen = view.getUint16(0);
-                    if (2 + headerLen >= buffer.byteLength) return;
-
-                    const audioData = new Uint8Array(buffer, 2 + headerLen);
-                    if (audioData.byteLength > 0) {
-                        audioChunks.push(new Uint8Array(audioData));
-                    }
-                } catch (_) { /* skip malformed frames */ }
+            } else if (event.data instanceof ArrayBuffer) {
+                // Binary frame: 2-byte header-length prefix, then header, then MP3 data
+                const buf = event.data;
+                if (buf.byteLength < 2) return;
+                const headerLen = new DataView(buf).getUint16(0);
+                const audioStart = 2 + headerLen;
+                if (audioStart >= buf.byteLength) return;
+                const chunk = new Uint8Array(buf, audioStart);
+                if (chunk.byteLength > 0) {
+                    audioChunks.push(new Uint8Array(chunk));
+                }
             }
         });
 
-        ws.addEventListener('error', (e) => {
-            if (resolved) return;
-            resolved = true;
+        ws.addEventListener('error', (evt) => {
+            if (done) return;
+            done = true;
             clearTimeout(timeout);
-            try { ws.close(); } catch (_) { }
-            reject(new Error(`Edge TTS WebSocket error: ${e.message || 'connection failed'}`));
+            try { ws.close(); } catch (_) {}
+            reject(new Error(`Edge TTS WebSocket error: ${evt.message || evt.type || 'unknown'}`));
         });
 
-        ws.addEventListener('close', (e) => {
-            if (resolved) return;
+        ws.addEventListener('close', (evt) => {
+            if (done) return;
             if (audioChunks.length > 0) {
-                finishWithAudio();
+                finish();
             } else {
-                resolved = true;
+                done = true;
                 clearTimeout(timeout);
-                reject(new Error(`Edge TTS WS closed (code=${e.code}, reason=${e.reason || 'none'}) — no audio`));
+                reject(new Error(`Edge TTS WS closed: code=${evt.code} reason=${evt.reason || 'none'}`));
             }
         });
+
+        // Step 3: Send speech.config
+        ws.send(
+            'Content-Type:application/json; charset=utf-8\r\n' +
+            'Path:speech.config\r\n\r\n' +
+            JSON.stringify({
+                context: {
+                    synthesis: {
+                        audio: {
+                            metadataoptions: {
+                                sentenceBoundaryEnabled: 'false',
+                                wordBoundaryEnabled: 'false',
+                            },
+                            outputFormat: 'audio-24khz-48kbitrate-mono-mp3',
+                        },
+                    },
+                },
+            })
+        );
+
+        // Step 4: Send SSML
+        const ssml =
+            `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'>` +
+            `<voice name='${escapeXml(voice)}'>` +
+            `<prosody pitch='${escapeXml(pitch)}' rate='${escapeXml(rate)}' volume='+0%'>` +
+            escapeXml(text) +
+            `</prosody></voice></speak>`;
+
+        ws.send(
+            `X-RequestId:${connectionId}\r\n` +
+            `Content-Type:application/ssml+xml\r\n` +
+            `X-Timestamp:${new Date().toISOString()}\r\n` +
+            `Path:ssml\r\n\r\n` +
+            ssml
+        );
     });
 }
 
-function concatenateChunks(chunks) {
-    let totalLen = 0;
-    for (const c of chunks) totalLen += c.byteLength;
-    const result = new Uint8Array(totalLen);
-    let offset = 0;
+function concat(chunks) {
+    let len = 0;
+    for (const c of chunks) len += c.byteLength;
+    const out = new Uint8Array(len);
+    let off = 0;
     for (const c of chunks) {
-        result.set(c, offset);
-        offset += c.byteLength;
+        out.set(c, off);
+        off += c.byteLength;
     }
-    return result.buffer;
+    return out.buffer;
 }
