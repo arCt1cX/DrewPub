@@ -1,6 +1,7 @@
 import React, { useRef } from 'react';
 import { useSettings } from '../contexts/SettingsContext';
 import { FONTS, THEMES, getTheme } from '../styles/themes';
+import { VOICE_PRESETS } from '../utils/ttsEngine';
 import './SettingsPanel.css';
 
 export default function SettingsPanel({ onClose }) {
@@ -329,6 +330,35 @@ export default function SettingsPanel({ onClose }) {
                                 🗣 Single Voice
                             </button>
                         </div>
+
+                        {/* Narrator voice selector */}
+                        {(() => {
+                            const engineType = settings.ttsEngine || 'cloud';
+                            const presets = VOICE_PRESETS[engineType] || VOICE_PRESETS.cloud;
+                            const voices = Object.entries(presets).map(([key, v]) => ({
+                                id: v.id,
+                                label: v.label,
+                                gender: v.gender,
+                                key,
+                            }));
+                            const currentVoice = settings.ttsNarratorVoice || presets.narrator.id;
+                            return (
+                                <div className="voice-selector-row">
+                                    <span className="slider-label">Narrator Voice</span>
+                                    <select
+                                        className="voice-select"
+                                        value={currentVoice}
+                                        onChange={e => updateSetting('ttsNarratorVoice', e.target.value)}
+                                    >
+                                        {voices.map(v => (
+                                            <option key={v.id} value={v.id}>
+                                                {v.label} {v.gender === 'male' ? '♂' : '♀'}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+                            );
+                        })()}
 
                         {/* Highlight toggle */}
                         <div className="toggle-group">
