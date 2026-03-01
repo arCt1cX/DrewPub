@@ -13,7 +13,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { extractChapterText, createTtsSegments } from '../utils/ttsTextExtractor';
 import { parseDialogue, assignVoicesToCharacters } from '../utils/dialogueParser';
 import { createTTSEngine, VOICE_PRESETS, createSilentWavBlob } from '../utils/ttsEngine';
-import { saveDialogueAnalysis, getDialogueAnalysis } from '../db';
+import { saveDialogueAnalysis, getDialogueAnalysis, saveVoiceOverrides, getVoiceOverrides } from '../db';
 
 /**
  * @param {Object} params
@@ -30,6 +30,8 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
     const [currentSegmentIndex, setCurrentSegmentIndex] = useState(-1);
     const [currentSpeaker, setCurrentSpeaker] = useState(null);
     const [totalSegments, setTotalSegments] = useState(0);
+    const [characters, setCharacters] = useState({});       // { name: { gender, count } }
+    const [characterVoices, setCharacterVoices] = useState({}); // { name: voiceId }
 
     const engineRef = useRef(null);
     const segmentsRef = useRef([]);
@@ -39,6 +41,7 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
     const activeRef = useRef(false);
     const settingsRef = useRef(settings);
     const audioElRef = useRef(null);
+    const voiceOverridesRef = useRef({});
 
     useEffect(() => { settingsRef.current = settings; }, [settings]);
 
@@ -106,7 +109,9 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
         if (!segment?.element) return;
 
         const element = segment.element;
-        const searchText = segment.text.substring(0, 60);
+        // Normalize search text same way as extraction
+        const searchRaw = segment.text.replace(/\s+/g, ' ');
+        const searchSub = searchRaw.substring(0, Math.min(25, searchRaw.length));
 
         try {
             const walker = doc.createTreeWalker(element, NodeFilter.SHOW_TEXT);
@@ -114,27 +119,32 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
             let found = false;
 
             while ((node = walker.nextNode())) {
-                const nodeText = node.textContent;
-                const idx = nodeText.indexOf(searchText.substring(0, Math.min(30, searchText.length)));
-
-                if (idx !== -1 && !found) {
+                // Normalize whitespace in DOM text for comparison
+                const nodeText = (node.textContent || '').replace(/\s+/g, ' ');
+                if (nodeText.includes(searchSub)) {
                     found = true;
                     const span = doc.createElement('span');
                     span.className = 'tts-highlight';
                     node.parentNode.insertBefore(span, node);
                     span.appendChild(node);
 
-                    span.scrollIntoView({
-                        behavior: 'smooth',
-                        block: 'center',
-                    });
+                    // Only scroll if element is not already visible
+                    const rect = span.getBoundingClientRect();
+                    const viewH = doc.documentElement.clientHeight || 600;
+                    if (rect.bottom < 0 || rect.top > viewH) {
+                        span.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    }
                     break;
                 }
             }
 
             if (!found && element !== doc.body) {
                 element.classList.add('tts-highlight-block');
-                element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                const rect = element.getBoundingClientRect();
+                const viewH = doc.documentElement.clientHeight || 600;
+                if (rect.bottom < 0 || rect.top > viewH) {
+                    element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
             }
         } catch (err) {
             console.warn('Highlight failed:', err);
@@ -166,34 +176,42 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
         const presets = VOICE_PRESETS[engineType] || VOICE_PRESETS.cloud;
         const assignment = voiceAssignmentRef.current;
         const multiVoice = settingsRef.current.ttsMultiVoice;
+        const narratorVoice = settingsRef.current.ttsNarratorVoice || presets.narrator.id;
 
-        if (!multiVoice || segment.segType === 'narration' || !segment.speaker) {
-            return settingsRef.current.ttsNarratorVoice || presets.narrator.id;
-        }
+        // Single-voice mode
+        if (!multiVoice) return narratorVoice;
 
-        // Character voice — use assignment
-        if (assignment[segment.speaker]) {
+        // Narration / heading → narrator voice
+        if (segment.segType !== 'dialogue') return narratorVoice;
+
+        // Dialogue with known speaker and existing voice assignment
+        if (segment.speaker && assignment[segment.speaker]) {
             return assignment[segment.speaker];
         }
 
-        // Auto-assign based on gender
-        const malePool = Object.values(presets).filter(p => p.gender === 'male' && p !== presets.narrator);
-        const femalePool = Object.values(presets).filter(p => p.gender === 'female');
+        // Speaker known but not yet assigned — auto-assign by gender
+        if (segment.speaker) {
+            const malePool = Object.values(presets)
+                .filter(p => p.gender === 'male' && p.id !== presets.narrator.id);
+            const femalePool = Object.values(presets).filter(p => p.gender === 'female');
 
-        if (segment.gender === 'female' && femalePool.length > 0) {
-            const voice = femalePool[0].id;
-            assignment[segment.speaker] = voice;
-            return voice;
-        } else if (segment.gender === 'male' && malePool.length > 0) {
-            const voice = malePool[0].id;
+            let voice;
+            if (segment.gender === 'female' && femalePool.length > 0) {
+                voice = femalePool[0].id;
+            } else if (malePool.length > 0) {
+                voice = malePool[0].id;
+            } else {
+                voice = narratorVoice;
+            }
             assignment[segment.speaker] = voice;
             return voice;
         }
 
-        // Default for unknown gender
-        const fallback = malePool.length > 0 ? malePool[0].id : presets.narrator.id;
-        assignment[segment.speaker] = fallback;
-        return fallback;
+        // Dialogue with NO speaker — use a distinct voice so it sounds
+        // different from narration (first non-narrator voice available)
+        const allNonNarrator = Object.values(presets)
+            .filter(p => p.id !== narratorVoice && p.id !== presets.narrator.id);
+        return allNonNarrator.length > 0 ? allNonNarrator[0].id : narratorVoice;
     }, []);
 
     // ── Speak a single segment ──────────────────────────────
@@ -226,7 +244,7 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
     }, [highlightSegment, getVoiceForSegment]);
 
     // ── Build voice assignment from characters ──────────────
-    const buildVoiceAssignment = useCallback((characters) => {
+    const buildVoiceAssignment = useCallback((chars) => {
         const engineType = settingsRef.current.ttsEngine || 'cloud';
         const presets = VOICE_PRESETS[engineType] || VOICE_PRESETS.cloud;
 
@@ -236,8 +254,122 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
 
         const narratorVoice = settingsRef.current.ttsNarratorVoice || presets.narrator.id;
 
-        return assignVoicesToCharacters(characters, allVoices, narratorVoice);
+        const auto = assignVoicesToCharacters(chars, allVoices, narratorVoice);
+
+        // Apply user overrides on top
+        const overrides = voiceOverridesRef.current;
+        for (const [name, info] of Object.entries(overrides)) {
+            if (info.voiceId) auto[name] = info.voiceId;
+        }
+        return auto;
     }, []);
+
+    // ── AI-enhanced dialogue analysis ───────────────────────
+    const enhanceWithAI = useCallback(async (parsed) => {
+        try {
+            const dialogueSegs = parsed.segments
+                .map((s, i) => ({ ...s, index: i }))
+                .filter(s => s.segType === 'dialogue');
+
+            if (dialogueSegs.length === 0) return parsed;
+
+            const payload = {
+                segments: parsed.segments.map((s, i) => ({
+                    text: s.text.substring(0, 400),
+                    segType: s.segType,
+                    speaker: s.speaker || null,
+                    index: i,
+                })),
+                knownCharacters: parsed.characters,
+            };
+
+            const resp = await fetch('/api/analyze-dialogue', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+                signal: AbortSignal.timeout ? AbortSignal.timeout(30000) : undefined,
+            });
+
+            if (!resp.ok) {
+                console.warn('[AI] Dialogue analysis failed:', resp.status);
+                return parsed;
+            }
+
+            const data = await resp.json();
+            if (!data.speakers || !Array.isArray(data.speakers)) return parsed;
+
+            let updated = 0;
+            for (const item of data.speakers) {
+                const seg = parsed.segments[item.index];
+                if (!seg || seg.segType !== 'dialogue') continue;
+
+                // AI found a speaker where regex didn't, or confirmed/improved
+                if (item.speaker) {
+                    const wasEmpty = !seg.speaker;
+                    seg.speaker = item.speaker;
+                    if (item.gender && item.gender !== 'unknown') {
+                        seg.gender = item.gender;
+                    }
+
+                    // Register/update character
+                    if (!parsed.characters[item.speaker]) {
+                        parsed.characters[item.speaker] = {
+                            gender: item.gender || 'unknown',
+                            count: 0,
+                        };
+                    }
+                    if (item.gender && item.gender !== 'unknown') {
+                        parsed.characters[item.speaker].gender = item.gender;
+                    }
+                    parsed.characters[item.speaker].count++;
+
+                    if (wasEmpty) updated++;
+                }
+            }
+
+            console.log(`[AI] Enhanced ${updated} dialogue segments with speaker info`);
+            return parsed;
+        } catch (err) {
+            console.warn('[AI] Enhancement failed (non-blocking):', err.message);
+            return parsed;
+        }
+    }, []);
+
+    // ── Update a character's voice (from CharacterPanel) ────
+    const updateCharacterVoice = useCallback(async (charName, voiceId, gender) => {
+        // Update the live voice assignment
+        voiceAssignmentRef.current[charName] = voiceId;
+
+        // Update override ref
+        voiceOverridesRef.current[charName] = { voiceId, gender: gender || null };
+
+        // Update characters state for UI
+        setCharacters(prev => {
+            const updated = { ...prev };
+            if (updated[charName]) {
+                updated[charName] = { ...updated[charName], gender: gender || updated[charName].gender };
+            }
+            return updated;
+        });
+
+        // Update characterVoices state for UI
+        setCharacterVoices(prev => ({ ...prev, [charName]: voiceId }));
+
+        // Also update gender in parsed segments if gender was changed
+        if (gender && parsedDataRef.current) {
+            for (const seg of parsedDataRef.current.segments) {
+                if (seg.speaker === charName) seg.gender = gender;
+            }
+            if (parsedDataRef.current.characters[charName]) {
+                parsedDataRef.current.characters[charName].gender = gender;
+            }
+        }
+
+        // Persist to IndexedDB
+        try {
+            await saveVoiceOverrides(bookId, voiceOverridesRef.current);
+        } catch { /* ignore */ }
+    }, [bookId]);
 
     // ── Playback loop ───────────────────────────────────────
     const playFromIndex = useCallback(async (startIndex) => {
@@ -382,7 +514,19 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
             }
 
             const rawSegments = createTtsSegments(blocks);
-            const parsed = parseDialogue(rawSegments);
+            let parsed = parseDialogue(rawSegments);
+
+            // Load voice overrides from DB
+            try {
+                const overrides = await getVoiceOverrides(bookId);
+                voiceOverridesRef.current = overrides;
+                // Apply gender overrides from saved data
+                for (const [name, info] of Object.entries(overrides)) {
+                    if (parsed.characters[name] && info.gender) {
+                        parsed.characters[name].gender = info.gender;
+                    }
+                }
+            } catch { /* no overrides yet */ }
 
             // Try to use cached dialogue analysis for better voice assignments
             try {
@@ -392,6 +536,21 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
                     for (const [name, info] of Object.entries(cached.characters)) {
                         if (parsed.characters[name] && info.gender !== 'unknown') {
                             parsed.characters[name].gender = info.gender;
+                        }
+                    }
+                    // Also restore speakers from cache for unattributed segments
+                    if (cached.segments) {
+                        for (let i = 0; i < Math.min(cached.segments.length, parsed.segments.length); i++) {
+                            const cs = cached.segments[i];
+                            const ps = parsed.segments[i];
+                            if (cs.speaker && !ps.speaker && ps.segType === 'dialogue') {
+                                ps.speaker = cs.speaker;
+                                ps.gender = cs.gender;
+                                if (!parsed.characters[cs.speaker]) {
+                                    parsed.characters[cs.speaker] = { gender: cs.gender || 'unknown', count: 0 };
+                                }
+                                parsed.characters[cs.speaker].count++;
+                            }
                         }
                     }
                     for (const seg of parsed.segments) {
@@ -404,43 +563,62 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
                 // Cache miss is fine
             }
 
+            // ── AI Enhancement (non-blocking — start playback, enhance in background) ──
             segmentsRef.current = parsed.segments;
             parsedDataRef.current = parsed;
             setTotalSegments(parsed.segments.length);
+            setCharacters({ ...parsed.characters });
 
-            // Build voice assignments
+            // Build initial voice assignments
             if (parsed.characters && Object.keys(parsed.characters).length > 0) {
                 voiceAssignmentRef.current = buildVoiceAssignment(parsed.characters);
-
-                // Cache analysis for next time
-                try {
-                    const chapterHref = renditionRef.current?.location?.start?.href || '0';
-                    await saveDialogueAnalysis({
-                        id: `${bookId}-${chapterHref}`,
-                        bookId,
-                        chapterIndex: chapterHref,
-                        segments: parsed.segments.map(s => ({
-                            text: s.text.substring(0, 100),
-                            segType: s.segType,
-                            speaker: s.speaker,
-                            gender: s.gender,
-                        })),
-                        characters: parsed.characters,
-                    });
-                } catch { /* ignore cache errors */ }
+                setCharacterVoices({ ...voiceAssignmentRef.current });
             }
 
             setTtsActive(true);
             activeRef.current = true;
             setTtsLoading(false);
 
+            // Start playback immediately
             playFromIndex(0);
+
+            // Run AI in background to improve future chapters & enrich current data
+            enhanceWithAI(parsed).then(enhanced => {
+                if (!activeRef.current) return;
+
+                parsedDataRef.current = enhanced;
+                segmentsRef.current = enhanced.segments;
+
+                // Rebuild voice assignments with AI-improved data
+                if (enhanced.characters && Object.keys(enhanced.characters).length > 0) {
+                    voiceAssignmentRef.current = buildVoiceAssignment(enhanced.characters);
+                    setCharacters({ ...enhanced.characters });
+                    setCharacterVoices({ ...voiceAssignmentRef.current });
+                }
+
+                // Cache the AI-enhanced analysis
+                try {
+                    const chapterHref = renditionRef.current?.location?.start?.href || '0';
+                    saveDialogueAnalysis({
+                        id: `${bookId}-${chapterHref}`,
+                        bookId,
+                        chapterIndex: chapterHref,
+                        segments: enhanced.segments.map(s => ({
+                            text: s.text.substring(0, 100),
+                            segType: s.segType,
+                            speaker: s.speaker,
+                            gender: s.gender,
+                        })),
+                        characters: enhanced.characters,
+                    });
+                } catch { /* ignore */ }
+            });
 
         } catch (err) {
             console.error('TTS start failed:', err);
             setTtsLoading(false);
         }
-    }, [initEngine, getIframeDoc, buildVoiceAssignment, playFromIndex, bookId, renditionRef]);
+    }, [initEngine, getIframeDoc, buildVoiceAssignment, playFromIndex, bookId, renditionRef, enhanceWithAI]);
 
     const stopTts = useCallback(() => {
         stoppedRef.current = true;
@@ -525,6 +703,8 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
         currentSegmentIndex,
         currentSpeaker,
         totalSegments,
+        characters,
+        characterVoices,
 
         startTts,
         stopTts,
@@ -532,5 +712,6 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
         resumeTts,
         nextSegment,
         prevSegment,
+        updateCharacterVoice,
     };
 }

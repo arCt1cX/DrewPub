@@ -43,6 +43,57 @@ const ATTRIBUTION_BEFORE = new RegExp(
     'g'
 );
 
+// ── Possessive attribution ("Briar's bellowing") ───────────
+const VOICE_NOUNS = [
+    'voice', 'bellowing', 'bellow', 'cry', 'scream', 'shout', 'whisper',
+    'words', 'tone', 'laughter', 'laugh', 'giggle', 'sob', 'groan',
+    'sneer', 'snarl', 'bark', 'growl', 'hiss', 'murmur', 'plea',
+    'demand', 'question', 'reply', 'answer', 'retort', 'exclamation',
+    'remark', 'comment', 'outburst', 'call', 'gasp', 'sigh', 'moan',
+    'wail', 'shriek', 'roar', 'cheer',
+].join('|');
+
+const POSSESSIVE_ATTR = new RegExp(
+    `([A-Z][a-z]+(?:\\s[A-Z][a-z]+)?)['\u2019]s\\s+(?:${VOICE_NOUNS})`,
+    'g'
+);
+
+// ── Name detection helpers ─────────────────────────────────
+const COMMON_NON_NAMES = new Set([
+    'the', 'but', 'and', 'then', 'with', 'that', 'this', 'what', 'how',
+    'his', 'her', 'its', 'she', 'he', 'they', 'you', 'not', 'one',
+    'all', 'some', 'most', 'each', 'every', 'many', 'few', 'could',
+    'would', 'should', 'have', 'had', 'has', 'was', 'were', 'are',
+    'did', 'does', 'may', 'can', 'will', 'just', 'even', 'still',
+    'also', 'only', 'now', 'here', 'there', 'where', 'when', 'very',
+    'much', 'more', 'such', 'other', 'both', 'yet', 'too', 'into',
+    'from', 'down', 'back', 'after', 'before', 'while', 'because',
+    'though', 'although', 'however', 'meanwhile', 'suddenly', 'finally',
+    'again', 'never', 'always', 'perhaps', 'maybe', 'well', 'like',
+    'said', 'asked', 'told', 'knew', 'thought', 'looked', 'seemed',
+    'felt', 'took', 'made', 'came', 'went', 'got', 'put', 'let',
+    'going', 'being', 'having', 'than', 'been', 'done', 'want', 'need',
+    'know', 'think', 'come', 'give', 'take', 'tell', 'really', 'quite',
+    'rather', 'instead', 'already', 'almost', 'about', 'around', 'along',
+    'inside', 'outside', 'without', 'between', 'nothing', 'something',
+    'everything', 'anything', 'everyone', 'someone', 'anyone', 'another',
+    'chapter', 'part', 'book', 'page', 'professor', 'lord', 'lady',
+    'king', 'queen', 'prince', 'princess', 'sir', 'madam', 'mister',
+]);
+
+function findLastNameInText(text) {
+    if (!text) return null;
+    const re = /\b([A-Z][a-z]{2,})\b/g;
+    const candidates = [];
+    let m;
+    while ((m = re.exec(text))) {
+        const word = m[1];
+        if (COMMON_NON_NAMES.has(word.toLowerCase())) continue;
+        candidates.push(word);
+    }
+    return candidates.length > 0 ? candidates[candidates.length - 1] : null;
+}
+
 // ── Gender heuristic ───────────────────────────────────────
 
 const MALE_NAMES = new Set([
@@ -115,24 +166,24 @@ function guessGenderFromContext(name, fullText) {
  * @returns {{ segments: Array, characters: Object }}
  */
 export function parseDialogue(segments) {
-    const characters = {}; // { name: { gender, count } }
+    const characters = {};
     const fullText = segments.map(s => s.text).join(' ');
-
-    // Use a for-loop instead of .map() so we can reference previous results
     const enhanced = [];
+
+    let lastSpeaker1 = null; // most recent speaker
+    let lastSpeaker2 = null; // second-most recent (for turn-taking)
 
     for (let idx = 0; idx < segments.length; idx++) {
         const seg = segments[idx];
         const result = { ...seg, segType: seg.segType || 'text', speaker: null, gender: null };
 
-        // Skip headings — they're always narration
         if (seg.segType === 'heading') {
             result.segType = 'narration';
             enhanced.push(result);
             continue;
         }
 
-        // Check if segment contains quoted speech
+        // ── Check for quoted speech ──
         let hasDialogue = false;
         for (const pattern of QUOTE_PATTERNS) {
             pattern.lastIndex = 0;
@@ -150,54 +201,91 @@ export function parseDialogue(segments) {
 
         result.segType = 'dialogue';
 
-        // Try to find speaker attribution
+        // ── Speaker attribution (multiple methods, confidence order) ──
         let speaker = null;
+        let match;
 
-        // Check "said John" pattern
+        // Method 1: "said John" / "John said"
         ATTRIBUTION_AFTER.lastIndex = 0;
-        let match = ATTRIBUTION_AFTER.exec(seg.text);
-        if (match) speaker = match[1]?.trim();
+        match = ATTRIBUTION_AFTER.exec(seg.text);
+        if (match?.[1]) speaker = match[1].trim();
 
-        // Check "John said" pattern
         if (!speaker) {
             ATTRIBUTION_BEFORE.lastIndex = 0;
             match = ATTRIBUTION_BEFORE.exec(seg.text);
-            if (match) speaker = match[1]?.trim();
+            if (match?.[1]) speaker = match[1].trim();
         }
 
-        // Filter out articles that got captured
+        // Method 2: "Briar's bellowing" (possessive + voice noun)
+        if (!speaker) {
+            POSSESSIVE_ATTR.lastIndex = 0;
+            match = POSSESSIVE_ATTR.exec(seg.text);
+            if (match?.[1]) speaker = match[1].trim();
+        }
+
+        // Method 3: Name before the opening quote in same segment
+        if (!speaker) {
+            const quoteIdx = seg.text.search(/["\u201C\u00AB\u2018]/);
+            if (quoteIdx > 2) {
+                speaker = findLastNameInText(seg.text.substring(0, quoteIdx));
+            }
+        }
+
+        // Method 4: Name or possessive in previous narration
+        if (!speaker && idx > 0) {
+            const prev = enhanced[idx - 1];
+            if (prev?.segType === 'narration') {
+                POSSESSIVE_ATTR.lastIndex = 0;
+                match = POSSESSIVE_ATTR.exec(prev.text);
+                if (match?.[1]) {
+                    speaker = match[1].trim();
+                } else {
+                    speaker = findLastNameInText(prev.text);
+                }
+            }
+        }
+
+        // Method 5: Continuation from previous dialogue
+        if (!speaker && idx > 0) {
+            const prev = enhanced[idx - 1];
+            if (prev?.speaker && prev.segType === 'dialogue') {
+                speaker = prev.speaker;
+            }
+        }
+
+        // Method 6: Turn-taking (alternate between last two known speakers)
+        if (!speaker && lastSpeaker1 && lastSpeaker2 && lastSpeaker1 !== lastSpeaker2) {
+            for (let k = idx - 1; k >= Math.max(0, idx - 5); k--) {
+                if (enhanced[k].segType === 'dialogue' && enhanced[k].speaker) {
+                    speaker = enhanced[k].speaker === lastSpeaker1 ? lastSpeaker2 : lastSpeaker1;
+                    break;
+                }
+            }
+        }
+
+        // ── Validate speaker ──
         if (speaker) {
             speaker = speaker.replace(/^the\s+/i, '');
-        }
-
-        // Skip unlikely "names" (too short, common words)
-        if (speaker && (speaker.length < 2 || /^(The|But|And|Then|With|That|This|What|How|His|Her|Its)$/i.test(speaker))) {
-            speaker = null;
+            if (speaker.length < 2 || /^(The|But|And|Then|With|That|This|What|How|His|Her|Its)$/i.test(speaker)) {
+                speaker = null;
+            }
         }
 
         if (speaker) {
             result.speaker = speaker;
 
-            // Register character
             if (!characters[speaker]) {
                 let gender = guessGender(speaker);
-                if (gender === 'unknown') {
-                    gender = guessGenderFromContext(speaker, fullText);
-                }
+                if (gender === 'unknown') gender = guessGenderFromContext(speaker, fullText);
                 characters[speaker] = { gender, count: 0 };
             }
             characters[speaker].count++;
             result.gender = characters[speaker].gender;
-        } else {
-            // No speaker found — check if previous segment had a speaker (continuation)
-            if (idx > 0) {
-                const prev = enhanced[idx - 1];
-                if (prev?.speaker && prev.segType === 'dialogue') {
-                    // Likely continuation of same speaker's dialogue
-                    result.speaker = prev.speaker;
-                    result.gender = prev.gender;
-                    if (characters[prev.speaker]) characters[prev.speaker].count++;
-                }
+
+            // Update turn-taking trackers
+            if (speaker !== lastSpeaker1) {
+                lastSpeaker2 = lastSpeaker1;
+                lastSpeaker1 = speaker;
             }
         }
 

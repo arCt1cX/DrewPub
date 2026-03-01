@@ -87,19 +87,18 @@ export function createTtsSegments(blocks) {
     for (const block of blocks) {
         const isHeading = block.tagName.startsWith('H');
 
-        if (isHeading || block.text.length < 120) {
-            // Short text or heading — keep as a single segment
+        if (isHeading) {
             segments.push({
                 text: block.text,
                 element: block.element,
                 blockIndex: block.index,
                 sentenceIndex: 0,
-                segType: isHeading ? 'heading' : 'text',
+                segType: 'heading',
             });
             continue;
         }
 
-        // Split longer paragraphs into sentences
+        // Always split into sentences — quote-aware splitter keeps dialogue intact
         const sentences = splitIntoSentences(block.text);
         for (let i = 0; i < sentences.length; i++) {
             if (sentences[i].trim().length < 2) continue;
@@ -117,33 +116,87 @@ export function createTtsSegments(blocks) {
 }
 
 /**
- * Split text into sentences using common punctuation boundaries.
- * Handles abbreviations, dialog quotes, ellipses etc.
+ * Split text into sentences — QUOTE-AWARE.
+ * Never splits inside quoted speech so dialogue stays intact.
+ * Handles abbreviations, ellipses, smart/straight quotes.
  */
 function splitIntoSentences(text) {
-    // Sentence-ending patterns: ., !, ?, …
-    // Avoid splitting on: Mr., Mrs., Dr., etc., e.g., i.e., ...
-    const abbrevs = /(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|vs|etc|e\.g|i\.e|a\.m|p\.m|vol|ch|no|fig)\./gi;
+    if (!text || text.length < 2) return [text].filter(Boolean);
 
-    // Temporarily replace abbreviations
+    // ── Protect abbreviations ──
+    const abbrevsRe = /(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|vs|etc|e\.g|i\.e|a\.m|p\.m|vol|ch|no|fig)\./gi;
     let processed = text;
     const abbrevMap = [];
-    processed = processed.replace(abbrevs, (match) => {
-        const placeholder = `\x00ABBR${abbrevMap.length}\x00`;
+    processed = processed.replace(abbrevsRe, (match) => {
+        const ph = `\x00A${abbrevMap.length}\x00`;
         abbrevMap.push(match);
-        return placeholder;
+        return ph;
     });
 
-    // Split on sentence-ending punctuation followed by space + uppercase, or end of string
-    // Also split on dialog breaks (closing quote + space)
-    const parts = processed.split(/(?<=[.!?…])\s+(?=[A-Z""\u201C\u00AB«])|(?<=[.!?…])\s*$/);
+    // ── Quote-aware walk ──
+    const sentences = [];
+    let current = '';
+    let quoteDepth = 0;
 
-    // Restore abbreviations
-    return parts.map(p => {
-        let restored = p;
-        for (let i = 0; i < abbrevMap.length; i++) {
-            restored = restored.replace(`\x00ABBR${i}\x00`, abbrevMap[i]);
+    const OPEN_Q  = new Set(['\u201C', '\u00AB', '\u2018']);
+    const CLOSE_Q = new Set(['\u201D', '\u00BB', '\u2019']);
+
+    for (let i = 0; i < processed.length; i++) {
+        const ch = processed[i];
+        current += ch;
+
+        // Track quote depth
+        if (OPEN_Q.has(ch)) {
+            quoteDepth++;
+        } else if (CLOSE_Q.has(ch)) {
+            quoteDepth = Math.max(0, quoteDepth - 1);
+        } else if (ch === '"') {
+            // ASCII straight quote — toggle
+            if (quoteDepth > 0) quoteDepth--;
+            else quoteDepth++;
         }
-        return restored;
-    }).filter(s => s.trim().length > 0);
+        if (quoteDepth > 4) quoteDepth = 0; // safety reset
+
+        // Never split inside quotes
+        if (quoteDepth > 0) continue;
+
+        // Detect sentence-ending punctuation
+        let isEnd = false;
+        if (ch === '!' || ch === '?' || ch === '\u2026') {
+            isEnd = true;
+        } else if (ch === '.') {
+            // Consume ellipsis (...)
+            if (i + 2 < processed.length && processed[i + 1] === '.' && processed[i + 2] === '.') {
+                current += '..';
+                i += 2;
+            }
+            isEnd = true;
+        }
+
+        if (!isEnd) continue;
+
+        // Look ahead for whitespace + uppercase / opening quote
+        let j = i + 1;
+        while (j < processed.length && processed[j] === ' ') j++;
+
+        if (j > i + 1 && j < processed.length) {
+            const next = processed[j];
+            if (/[A-Z]/.test(next) || OPEN_Q.has(next) || next === '"') {
+                sentences.push(current.trim());
+                current = '';
+                i = j - 1;
+            }
+        }
+    }
+
+    if (current.trim()) sentences.push(current.trim());
+
+    // ── Restore abbreviations ──
+    return sentences.map(s => {
+        let r = s;
+        for (let k = 0; k < abbrevMap.length; k++) {
+            r = r.replace(`\x00A${k}\x00`, abbrevMap[k]);
+        }
+        return r;
+    }).filter(s => s.length > 0);
 }

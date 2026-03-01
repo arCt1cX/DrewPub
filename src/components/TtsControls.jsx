@@ -13,6 +13,8 @@ export default function TtsControls({
     onStop,
     onNext,
     onPrev,
+    onShowCharacters,
+    hasCharacters,
     rate,
     onRateChange,
 }) {
@@ -60,6 +62,14 @@ export default function TtsControls({
 
                 <button className="tts-btn tts-btn-stop" onClick={onStop} title="Stop TTS">
                     ⏹
+                </button>
+
+                <button
+                    className={`tts-btn ${hasCharacters ? 'tts-btn-chars' : ''}`}
+                    onClick={onShowCharacters}
+                    title="Characters & Voices"
+                >
+                    🎭
                 </button>
 
                 {/* Speed control */}

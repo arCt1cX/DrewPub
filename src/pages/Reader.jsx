@@ -9,6 +9,7 @@ import SettingsPanel from '../components/SettingsPanel';
 import TableOfContents from '../components/TableOfContents';
 import DictionaryPopup from '../components/DictionaryPopup';
 import TtsControls from '../components/TtsControls';
+import CharacterPanel from '../components/CharacterPanel';
 import useTts from '../hooks/useTts';
 import './Reader.css';
 
@@ -48,6 +49,7 @@ export default function Reader() {
 
     // TTS hook
     const tts = useTts({ renditionRef, viewerRef, settings, bookId });
+    const [showCharacterPanel, setShowCharacterPanel] = useState(false);
 
     useEffect(() => { showControlsRef.current = showControls; }, [showControls]);
     useEffect(() => { showSettingsRef.current = showSettings; }, [showSettings]);
@@ -779,8 +781,21 @@ export default function Reader() {
                     onStop={tts.stopTts}
                     onNext={tts.nextSegment}
                     onPrev={tts.prevSegment}
+                    onShowCharacters={() => setShowCharacterPanel(prev => !prev)}
+                    hasCharacters={Object.keys(tts.characters || {}).length > 0}
                     rate={settings.ttsRate || 1.0}
                     onRateChange={(r) => updateSetting('ttsRate', r)}
+                />
+            )}
+
+            {/* Character Voice Panel */}
+            {showCharacterPanel && tts.ttsActive && (
+                <CharacterPanel
+                    characters={tts.characters}
+                    characterVoices={tts.characterVoices}
+                    engineType={settings.ttsEngine || 'cloud'}
+                    onChangeVoice={tts.updateCharacterVoice}
+                    onClose={() => setShowCharacterPanel(false)}
                 />
             )}
 

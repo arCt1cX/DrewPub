@@ -1,7 +1,7 @@
 import { openDB } from 'idb';
 
 const DB_NAME = 'drewpub-db';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 let dbPromise;
 
@@ -30,6 +30,11 @@ function getDB() {
                 if (!db.objectStoreNames.contains('dialogueAnalysis')) {
                     const daStore = db.createObjectStore('dialogueAnalysis', { keyPath: 'id' });
                     daStore.createIndex('bookId', 'bookId');
+                }
+                // v3: Voice overrides per book
+                if (!db.objectStoreNames.contains('voiceOverrides')) {
+                    const voStore = db.createObjectStore('voiceOverrides', { keyPath: 'id' });
+                    voStore.createIndex('bookId', 'bookId');
                 }
             }
         });
@@ -164,4 +169,18 @@ export async function getBookCharacters(bookId) {
         }
     }
     return characters;
+}
+
+// ─── Voice Overrides ────────────────────────────────
+
+export async function saveVoiceOverrides(bookId, overrides) {
+    // overrides: { characterName: { voiceId, gender } }
+    const db = await getDB();
+    return db.put('voiceOverrides', { id: bookId, bookId, overrides, updatedAt: Date.now() });
+}
+
+export async function getVoiceOverrides(bookId) {
+    const db = await getDB();
+    const record = await db.get('voiceOverrides', bookId);
+    return record?.overrides || {};
 }
