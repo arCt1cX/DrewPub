@@ -115,17 +115,62 @@ export function createTtsSegments(blocks) {
     return segments;
 }
 
+// ── Quote protection for sentence splitter ──────────────────
+// Unicode private-use-area placeholders for punctuation inside quotes
+const Q_PERIOD = '\uE001';
+const Q_EXCL   = '\uE002';
+const Q_QUEST  = '\uE003';
+const Q_ELLIP  = '\uE004';
+
 /**
- * Split text into sentences — robust, no fragile quote-depth tracking.
- * Protects abbreviations and decimal numbers.
+ * Replace sentence-ending punctuation inside paired quotes with placeholders
+ * so the splitter doesn't break mid-dialogue.
+ */
+function protectQuotedContent(text) {
+    const protect = (inner) => inner
+        .replace(/\./g, Q_PERIOD)
+        .replace(/!/g, Q_EXCL)
+        .replace(/\?/g, Q_QUEST)
+        .replace(/\u2026/g, Q_ELLIP);
+
+    let result = text;
+
+    // Smart double quotes: \u201C…\u201D (distinct open/close chars)
+    result = result.replace(/\u201C([^\u201D]*)\u201D/g,
+        (_, inner) => '\u201C' + protect(inner) + '\u201D');
+
+    // Guillemets: «…»
+    result = result.replace(/\u00AB([^\u00BB]*)\u00BB/g,
+        (_, inner) => '\u00AB' + protect(inner) + '\u00BB');
+
+    // Straight double quotes: "…" (same char for open/close)
+    result = result.replace(/"([^"]*?)"/g,
+        (_, inner) => '"' + protect(inner) + '"');
+
+    return result;
+}
+
+function restoreQuoteProtection(text) {
+    return text
+        .replace(/\uE001/g, '.')
+        .replace(/\uE002/g, '!')
+        .replace(/\uE003/g, '?')
+        .replace(/\uE004/g, '\u2026');
+}
+
+/**
+ * Split text into sentences — quote-aware, robust.
+ * Protects quoted content, abbreviations, and decimal numbers.
  * Splits on sentence-ending punctuation followed by whitespace.
  */
 function splitIntoSentences(text) {
     if (!text || text.length < 2) return [text].filter(Boolean);
 
+    // ── Protect quoted content FIRST ──
+    let processed = protectQuotedContent(text);
+
     // ── Protect abbreviations ──
     const abbrevsRe = /(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|vs|etc|e\.g|i\.e|a\.m|p\.m|vol|ch|no|fig)\./gi;
-    let processed = text;
     const placeholders = [];
     processed = processed.replace(abbrevsRe, (match) => {
         const ph = `\x00P${placeholders.length}\x00`;
@@ -144,13 +189,15 @@ function splitIntoSentences(text) {
     // Then one or more whitespace
     const parts = processed.split(/(?<=[.!?\u2026][\u201D\u2019\u00BB\u00BB"'\)]*) +/);
 
-    // ── Restore placeholders ──
+    // ── Restore all placeholders ──
     const restored = parts.map(p => {
         let r = p;
         for (let k = 0; k < placeholders.length; k++) {
             r = r.split(`\x00P${k}\x00`).join(placeholders[k]);
         }
         r = r.split('\x00N').join('.');
+        // Restore quote-protected punctuation
+        r = restoreQuoteProtection(r);
         return r.trim();
     }).filter(s => s.length > 0);
 

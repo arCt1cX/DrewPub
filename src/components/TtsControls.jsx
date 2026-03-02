@@ -33,8 +33,13 @@ export default function TtsControls({
 
             {/* Speaker info */}
             <div className="tts-info">
-                <span className="tts-speaker">
-                    {loading ? '⏳ Generating...' : (currentSpeaker || 'Narrator')}
+                <span className={`tts-speaker ${currentSpeaker && currentSpeaker !== 'Narrator' ? 'tts-speaker-character' : ''}`}>
+                    {loading ? '⏳ Generating...' : (
+                        <>
+                            <span className="tts-speaker-icon">{currentSpeaker && currentSpeaker !== 'Narrator' ? '🗣' : '📖'}</span>
+                            {currentSpeaker || 'Narrator'}
+                        </>
+                    )}
                 </span>
                 <span className="tts-segment-count">
                     {currentSegmentIndex >= 0 ? `${currentSegmentIndex + 1}/${totalSegments}` : '—'}

@@ -89,9 +89,76 @@ function findLastNameInText(text) {
     while ((m = re.exec(text))) {
         const word = m[1];
         if (COMMON_NON_NAMES.has(word.toLowerCase())) continue;
+        if (!isValidCharacterName(word)) continue;
         candidates.push(word);
     }
     return candidates.length > 0 ? candidates[candidates.length - 1] : null;
+}
+
+// ── Character name validation & normalization ──────────────
+
+const NON_CHARACTER_PATTERNS = [
+    /^(the|a|an)\s/i,
+    /^(whatever|nothing|something|everything|everyone|someone|anyone|nobody|nowhere|somehow|sometime)$/i,
+    /^(yes|no|ok|okay|well|hey|oh|ah|hmm|huh|ugh|wow|ooh|aah|aye|nay)$/i,
+    /^(here|there|where|when|how|what|why|who|whom|whose)$/i,
+    /^(this|that|these|those|it|its|mine|yours|ours|theirs|myself|himself|herself|itself|themselves)$/i,
+    /^(north|south|east|west|castle|tower|forest|city|town|village|kingdom|realm|island|valley|mountain|hall|house|inn|tavern|bridge|gate|road|street|temple|church|palace|court|garden|library|school|university|prison|cave|mine|farm|port|bay|cliff|hill|peak|fort|keep)$/i,
+    /^\d/,  // starts with digit
+    /^.$/,  // single character
+];
+
+export function isValidCharacterName(name) {
+    if (!name || name.trim().length < 2) return false;
+    const trimmed = name.trim();
+    if (COMMON_NON_NAMES.has(trimmed.toLowerCase())) return false;
+    for (const pattern of NON_CHARACTER_PATTERNS) {
+        if (pattern.test(trimmed)) return false;
+    }
+    return true;
+}
+
+export function normalizeCharacterName(name) {
+    if (!name) return null;
+    let n = name.trim();
+    if (n.length < 2) return null;
+    // ALL CAPS or all lowercase → Title Case (first letter of each word)
+    if (n === n.toUpperCase() || n === n.toLowerCase()) {
+        n = n.split(/\s+/).map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+    }
+    return n;
+}
+
+function findCanonicalName(name, characters) {
+    const lower = name.toLowerCase();
+    for (const existing of Object.keys(characters)) {
+        if (existing.toLowerCase() === lower) return existing;
+    }
+    return name;
+}
+
+function mergeCharacterVariants(characters) {
+    const merged = {};
+    const nameMap = {}; // lowercase → canonical name
+
+    for (const [name, info] of Object.entries(characters)) {
+        const lower = name.toLowerCase();
+        if (!isValidCharacterName(name)) continue;
+
+        if (nameMap[lower]) {
+            const canonical = nameMap[lower];
+            merged[canonical].count += info.count;
+            if (info.gender !== 'unknown' && merged[canonical].gender === 'unknown') {
+                merged[canonical].gender = info.gender;
+            }
+        } else {
+            const canonical = normalizeCharacterName(name) || name;
+            nameMap[lower] = canonical;
+            merged[canonical] = { ...info };
+        }
+    }
+
+    return { merged, nameMap };
 }
 
 // ── Gender heuristic ───────────────────────────────────────
@@ -303,15 +370,18 @@ export function parseDialogue(segments) {
             }
         }
 
-        // ── Validate speaker ──
+        // ── Validate & normalize speaker ──
         if (speaker) {
             speaker = speaker.replace(/^the\s+/i, '');
-            if (speaker.length < 2 || /^(The|But|And|Then|With|That|This|What|How|His|Her|Its)$/i.test(speaker)) {
+            speaker = normalizeCharacterName(speaker);
+            if (!speaker || !isValidCharacterName(speaker)) {
                 speaker = null;
             }
         }
 
+        // Deduplicate: find canonical name if it already exists under a different case
         if (speaker) {
+            speaker = findCanonicalName(speaker, characters);
             result.speaker = speaker;
 
             if (!characters[speaker]) {
@@ -332,7 +402,20 @@ export function parseDialogue(segments) {
         enhanced.push(result);
     }
 
-    return { segments: enhanced, characters };
+    // ── Post-process: merge character name variants ──
+    const { merged, nameMap } = mergeCharacterVariants(characters);
+
+    // Update segment speakers to use canonical names
+    for (const seg of enhanced) {
+        if (seg.speaker) {
+            const lower = seg.speaker.toLowerCase();
+            if (nameMap[lower] && nameMap[lower] !== seg.speaker) {
+                seg.speaker = nameMap[lower];
+            }
+        }
+    }
+
+    return { segments: enhanced, characters: merged };
 }
 
 /**

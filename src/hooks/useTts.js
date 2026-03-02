@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { extractChapterText, createTtsSegments } from '../utils/ttsTextExtractor';
-import { parseDialogue, assignVoicesToCharacters } from '../utils/dialogueParser';
+import { parseDialogue, assignVoicesToCharacters, isValidCharacterName, normalizeCharacterName } from '../utils/dialogueParser';
 import { createTTSEngine, VOICE_PRESETS, createSilentWavBlob } from '../utils/ttsEngine';
 import { saveDialogueAnalysis, getDialogueAnalysis, saveVoiceOverrides, getVoiceOverrides } from '../db';
 
@@ -191,7 +191,7 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
     }, [getIframeDoc]);
 
     // ── Get voice for a segment ─────────────────────────────
-    const getVoiceForSegment = useCallback((segment) => {
+    const getVoiceForSegment = useCallback((segment, index) => {
         const engineType = settingsRef.current.ttsEngine || 'cloud';
         const presets = VOICE_PRESETS[engineType] || VOICE_PRESETS.cloud;
         const assignment = voiceAssignmentRef.current;
@@ -201,8 +201,24 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
         // Single-voice mode
         if (!multiVoice) return narratorVoice;
 
-        // Narration / heading → narrator voice
-        if (segment.segType !== 'dialogue') return narratorVoice;
+        // Narration / heading → narrator voice (unless continuation of dialogue in same block)
+        if (segment.segType !== 'dialogue') {
+            // Check if this segment is in the same block as a preceding dialogue segment
+            // (the quote may have been split and this piece wasn't detected as dialogue)
+            if (typeof index === 'number' && index > 0) {
+                const prev = segmentsRef.current[index - 1];
+                if (prev?.segType === 'dialogue' && prev.blockIndex === segment.blockIndex) {
+                    // Same block, previous was dialogue — keep the dialogue voice
+                    const speaker = prev.speaker;
+                    if (speaker && assignment[speaker]) return assignment[speaker];
+                    // Fallback: use a non-narrator voice for consistency
+                    const allNonNarrator = Object.values(presets)
+                        .filter(p => p.id !== narratorVoice && p.id !== presets.narrator.id);
+                    return allNonNarrator.length > 0 ? allNonNarrator[0].id : narratorVoice;
+                }
+            }
+            return narratorVoice;
+        }
 
         // Dialogue with known speaker and existing voice assignment
         if (segment.speaker && assignment[segment.speaker]) {
@@ -249,7 +265,7 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
 
         highlightSegment(index);
 
-        const voiceId = getVoiceForSegment(segment);
+        const voiceId = getVoiceForSegment(segment, index);
         const rate = settingsRef.current.ttsRate || 1.0;
         const pitch = settingsRef.current.ttsPitch || 1.0;
 
@@ -325,23 +341,33 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
 
                 // AI found a speaker where regex didn't, or confirmed/improved
                 if (item.speaker) {
+                    // Normalize the AI-returned name
+                    let aiName = normalizeCharacterName(item.speaker);
+                    if (!aiName || !isValidCharacterName(aiName)) continue;
+
+                    // Deduplicate: check if this name already exists under different casing
+                    const lowerName = aiName.toLowerCase();
+                    const existingKey = Object.keys(parsed.characters)
+                        .find(k => k.toLowerCase() === lowerName);
+                    if (existingKey) aiName = existingKey;
+
                     const wasEmpty = !seg.speaker;
-                    seg.speaker = item.speaker;
+                    seg.speaker = aiName;
                     if (item.gender && item.gender !== 'unknown') {
                         seg.gender = item.gender;
                     }
 
                     // Register/update character
-                    if (!parsed.characters[item.speaker]) {
-                        parsed.characters[item.speaker] = {
+                    if (!parsed.characters[aiName]) {
+                        parsed.characters[aiName] = {
                             gender: item.gender || 'unknown',
                             count: 0,
                         };
                     }
                     if (item.gender && item.gender !== 'unknown') {
-                        parsed.characters[item.speaker].gender = item.gender;
+                        parsed.characters[aiName].gender = item.gender;
                     }
-                    parsed.characters[item.speaker].count++;
+                    parsed.characters[aiName].count++;
 
                     if (wasEmpty) updated++;
                 }
@@ -409,7 +435,7 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
             // Prefetch next segment
             if (i + 1 < segmentsRef.current.length && engineRef.current?.prefetch) {
                 const nextSeg = segmentsRef.current[i + 1];
-                const nextVoice = getVoiceForSegment(nextSeg);
+                const nextVoice = getVoiceForSegment(nextSeg, i + 1);
                 const rate = settingsRef.current.ttsRate || 1.0;
                 const pitch = settingsRef.current.ttsPitch || 1.0;
                 engineRef.current.prefetch(nextSeg.text, nextVoice, rate, pitch);

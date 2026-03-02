@@ -62,6 +62,19 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.82rem;
+}
+
+.tts-speaker-icon {
+    font-size: 0.9rem;
+    flex-shrink: 0;
+}
+
+.tts-speaker-character {
+    color: var(--accent, #6cacf0);
 }
 
 .tts-segment-count {

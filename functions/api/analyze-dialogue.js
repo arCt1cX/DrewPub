@@ -14,6 +14,32 @@ const CORS = {
     'Access-Control-Allow-Headers': 'Content-Type',
 };
 
+// Words that should never be identified as character names
+const NON_CHARACTER_WORDS = new Set([
+    'the', 'but', 'and', 'then', 'with', 'that', 'this', 'what', 'how',
+    'his', 'her', 'its', 'she', 'he', 'they', 'you', 'not', 'one',
+    'whatever', 'nothing', 'something', 'everything', 'everyone', 'someone',
+    'anyone', 'nobody', 'nowhere', 'somehow', 'yes', 'no', 'ok', 'okay',
+    'well', 'hey', 'oh', 'ah', 'hmm', 'huh', 'ugh', 'wow', 'here', 'there',
+    'where', 'when', 'how', 'what', 'why', 'who', 'whom', 'whose',
+    'north', 'south', 'east', 'west', 'castle', 'tower', 'forest', 'city',
+    'town', 'village', 'kingdom', 'realm', 'island', 'valley', 'mountain',
+    'hall', 'house', 'inn', 'tavern', 'bridge', 'gate', 'road', 'street',
+    'temple', 'church', 'palace', 'court', 'garden', 'library', 'school',
+    'cave', 'mine', 'farm', 'port', 'bay', 'cliff', 'hill', 'peak', 'fort',
+    'chapter', 'part', 'book', 'page', 'narrator', 'unknown', 'none',
+]);
+
+function isNonCharacterName(name) {
+    if (!name || name.trim().length < 2) return true;
+    const lower = name.trim().toLowerCase();
+    if (NON_CHARACTER_WORDS.has(lower)) return true;
+    if (/^\d/.test(name)) return true;           // starts with digit
+    if (/^(the|a|an)\s/i.test(name)) return true; // "the X", "a X"
+    if (name.trim().length === 1) return true;     // single char
+    return false;
+}
+
 export async function onRequestOptions() {
     return new Response(null, { headers: CORS });
 }
@@ -87,10 +113,16 @@ Known characters so far: ${knownList}
 Rules:
 - Return ONLY a JSON array, no explanation
 - Each element: {"i": <number>, "speaker": "<name>", "gender": "male"|"female"|"unknown"}
-- Use the character's proper name (capitalized)
-- If you cannot determine the speaker, use "speaker": null
+- Use the character's PROPER NAME with correct capitalization (e.g., "Regis" not "regis" or "REGIS")
+- ONLY identify actual CHARACTERS (people/beings who speak). Do NOT include:
+  * Place names (cities, countries, buildings, forests, mountains, etc.)
+  * Common words or non-name words (e.g., "Whatever", "Nothing", "Something")
+  * Titles without names (e.g., just "Lord" or "Professor")
+  * Objects, concepts, or abstract nouns
+- If a character has already been identified, always use the EXACT SAME spelling
+- If you cannot determine the speaker, use "speaker": null (do NOT guess random words)
 - Detect gender from context clues (pronouns, titles, descriptions)
-- Pay attention to dialogue tags like "said", "asked" etc. AND contextual clues like who was just described, addressed, or acting
+- Pay attention to dialogue tags like "said", "asked" etc. AND contextual clues
 
 Excerpts:
 ${numberedLines}
@@ -116,9 +148,25 @@ JSON array:`;
                         const parsed = JSON.parse(jsonMatch[0]);
                         for (const item of parsed) {
                             if (typeof item.i === 'number' && item.i >= 0 && item.i < batch.length) {
+                                let speaker = item.speaker ? item.speaker.trim() : null;
+
+                                // Normalize name casing
+                                if (speaker) {
+                                    if (speaker === speaker.toUpperCase() || speaker === speaker.toLowerCase()) {
+                                        speaker = speaker.split(/\s+/).map(w =>
+                                            w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()
+                                        ).join(' ');
+                                    }
+                                }
+
+                                // Filter out obvious non-character names
+                                if (speaker && isNonCharacterName(speaker)) {
+                                    speaker = null;
+                                }
+
                                 allResults.push({
                                     index: batch[item.i].index,
-                                    speaker: item.speaker || null,
+                                    speaker: speaker,
                                     gender: ['male', 'female'].includes(item.gender) ? item.gender : 'unknown',
                                 });
                             }
