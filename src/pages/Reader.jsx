@@ -25,6 +25,7 @@ export default function Reader() {
     const [bookMeta, setBookMeta] = useState(null);
     const [loading, setLoading] = useState(true);
     const [currentCfi, setCurrentCfi] = useState(null);
+    const [currentHref, setCurrentHref] = useState('');
     const [progress, setProgress] = useState(0);
     const [chapterTitle, setChapterTitle] = useState('');
     const [toc, setToc] = useState([]);
@@ -195,16 +196,31 @@ export default function Reader() {
     const makeRelocatedHandler = useCallback((book, destroyed_getter) => (location) => {
         if (destroyed_getter()) return;
         const cfi = location.start.cfi;
+        const href = location.start.href;
         setCurrentCfi(cfi);
-        const pct = book.locations.percentageFromCfi(cfi);
-        const progressPct = Math.round(pct * 100);
+        setCurrentHref(href);
+
+        let progressPct = 0;
+        let p = 0;
+        
+        // Use spine index as fallback for large books where locations are skipped
+        if (book.locations && book.locations.length() > 0) {
+            const pct = book.locations.percentageFromCfi(cfi);
+            progressPct = Math.round(pct * 100);
+            p = book.locations.locationFromCfi(cfi) || 0;
+        } else if (book.spine && book.spine.length > 0) {
+            progressPct = Math.round((location.start.index / book.spine.length) * 100);
+            p = location.start.index + 1; // Use chapter number as page number
+        }
+
         setProgress(progressPct);
-        setCurrentPage(book.locations.locationFromCfi(cfi) || 0);
+        setCurrentPage(p);
         savePosition(bookId, cfi, progressPct);
         updateBookMeta(bookId, { progress: progressPct, lastReadAt: Date.now() });
+        
         const chapter = book.navigation?.toc?.find(item => {
-            const href = item.href.split('#')[0];
-            return location.start.href?.includes(href);
+            const itemHref = item.href.split('#')[0];
+            return href?.includes(itemHref);
         });
         if (chapter) setChapterTitle(chapter.label?.trim() || '');
     }, [bookId]);
@@ -260,11 +276,15 @@ export default function Reader() {
                 showControlsTemporarily();
 
                 // Non-blocking background generation of locations
-                book.locations.generate(1024).then(() => {
-                    if (!destroyed_getter()) {
-                        setTotalPages(book.locations.length());
-                    }
-                }).catch(err => console.warn('Paging generation failed:', err));
+                if (book.spine && book.spine.length > 150) {
+                    if (!destroyed_getter()) setTotalPages(book.spine.length);
+                } else {
+                    book.locations.generate(1024).then(() => {
+                        if (!destroyed_getter()) {
+                            setTotalPages(book.locations.length());
+                        }
+                    }).catch(err => console.warn('Paging generation failed:', err));
+                }
 
             } catch (e) {
                 console.error('Failed to load book:', e);
@@ -806,7 +826,7 @@ export default function Reader() {
             {showToc && (
                 <TableOfContents
                     toc={toc}
-                    currentHref=""
+                    currentHref={currentHref}
                     onSelect={handleGoToChapter}
                     onClose={() => setShowToc(false)}
                 />
