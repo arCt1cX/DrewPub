@@ -15,9 +15,17 @@ export default function BookCard({ book, viewMode, onDelete }) {
 
     const handleDelete = async (e) => {
         e.stopPropagation();
+        const confirmed = window.confirm(`Are you sure you want to remove "${book.title}"?`);
+        if (!confirmed) return;
+        
         setShowMenu(false);
-        await deleteBook(book.id);
-        onDelete(book.id);
+        try {
+            await deleteBook(book.id);
+            onDelete(book.id);
+        } catch (err) {
+            console.error('Failed to delete book:', err);
+            alert('Could not delete book. Please try again.');
+        }
     };
 
     const progress = book.progress || 0;
@@ -56,7 +64,7 @@ export default function BookCard({ book, viewMode, onDelete }) {
                     ⋯
                 </button>
                 {showMenu && (
-                    <div className="book-menu glass-strong">
+                    <div className="book-menu glass-strong" onClick={e => e.stopPropagation()}>
                         <button className="book-menu-item delete" onClick={handleDelete}>
                             🗑 Remove
                         </button>
@@ -72,7 +80,7 @@ export default function BookCard({ book, viewMode, onDelete }) {
             onClick={handleOpen}
             onPointerDown={() => setPressing(true)}
             onPointerUp={() => setPressing(false)}
-            onPointerLeave={() => { setPressing(false); setShowMenu(false); }}
+            onPointerLeave={() => { setPressing(false); }}
         >
             <div className="book-cover">
                 {book.cover ? (

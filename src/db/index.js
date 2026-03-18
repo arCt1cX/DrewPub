@@ -61,8 +61,36 @@ export async function getAllBooks() {
 
 export async function deleteBook(id) {
     const db = await getDB();
-    await db.delete('books', id);
-    await db.delete('positions', id);
+    const tx = db.transaction(['books', 'positions', 'ttsCache', 'dialogueAnalysis', 'voiceOverrides'], 'readwrite');
+    
+    await Promise.all([
+        tx.objectStore('books').delete(id),
+        tx.objectStore('positions').delete(id),
+        // Clear TTS cache for this book (using index)
+        (async () => {
+            const ttsStore = tx.objectStore('ttsCache');
+            const ttsIdx = ttsStore.index('bookId');
+            let cursor = await ttsIdx.openKeyCursor(IDBKeyRange.only(id));
+            while (cursor) {
+                await ttsStore.delete(cursor.primaryKey);
+                cursor = await cursor.continue();
+            }
+        })(),
+        // Clear Dialogue Analysis (mostly based on bookId-chapterIndex keys, but some might be indexed)
+        // DialogueAnalysis store has id "bookId-chapterIndex" but also index "bookId"
+        (async () => {
+            const daStore = tx.objectStore('dialogueAnalysis');
+            const daIdx = daStore.index('bookId');
+            let cursor = await daIdx.openKeyCursor(IDBKeyRange.only(id));
+            while (cursor) {
+                await daStore.delete(cursor.primaryKey);
+                cursor = await cursor.continue();
+            }
+        })(),
+        tx.objectStore('voiceOverrides').delete(id)
+    ]);
+    
+    await tx.done;
 }
 
 export async function updateBookMeta(id, updates) {
