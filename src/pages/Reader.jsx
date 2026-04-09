@@ -223,6 +223,21 @@ export default function Reader() {
             return href?.includes(itemHref);
         });
         if (chapter) setChapterTitle(chapter.label?.trim() || '');
+
+        // ── Memory Optimization for Large Books (20-chapter window) ──
+        if (book.spine && book.spine.length > 30 && location.start && typeof location.start.index !== 'undefined') {
+            const currentIndex = location.start.index;
+            const WINDOW = 10; // Keep 10 before and 10 after
+            for (let i = 0; i < book.spine.length; i++) {
+                if (Math.abs(i - currentIndex) > WINDOW) {
+                    const sec = book.spine.get(i);
+                    // Unload XML/DOM content from memory if loaded
+                    if (sec && sec.contents) {
+                        sec.unload();
+                    }
+                }
+            }
+        }
     }, [bookId]);
 
     // ── Rendition options ─────────────────────────────────
