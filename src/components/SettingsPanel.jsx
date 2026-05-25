@@ -2,6 +2,7 @@ import React, { useRef } from 'react';
 import { useSettings } from '../contexts/SettingsContext';
 import { FONTS, THEMES, getTheme } from '../styles/themes';
 import { VOICE_PRESETS } from '../utils/ttsEngine';
+import { IconClose, IconPlus, IconCloud, IconMic, IconBookOpen, IconHighlighter, IconVolume } from './Icons';
 import './SettingsPanel.css';
 
 export default function SettingsPanel({ onClose }) {
@@ -9,7 +10,6 @@ export default function SettingsPanel({ onClose }) {
     const fontInputRef = useRef(null);
     const bgInputRef = useRef(null);
 
-    // All fonts: built-in + custom
     const allFonts = [...FONTS, ...(settings.customFonts || [])];
     const currentFont = allFonts.find(f => f.id === settings.font) || FONTS[0];
 
@@ -19,7 +19,6 @@ export default function SettingsPanel({ onClose }) {
         updateMultipleSettings({ theme: 'custom', customTheme: updated });
     };
 
-    // ── Custom Font Upload ────────────────────────────────
     const handleFontUpload = async (e) => {
         const file = e.target.files?.[0];
         if (!file) return;
@@ -32,7 +31,6 @@ export default function SettingsPanel({ onClose }) {
             const reader = new FileReader();
             reader.onload = async () => {
                 const dataUrl = reader.result;
-                // Register with FontFace API
                 const face = new FontFace(familyName, `url(${dataUrl})`);
                 await face.load();
                 document.fonts.add(face);
@@ -47,7 +45,6 @@ export default function SettingsPanel({ onClose }) {
             console.error('Failed to load font:', err);
         }
 
-        // Clear input so same file can be re-selected
         e.target.value = '';
     };
 
@@ -59,7 +56,6 @@ export default function SettingsPanel({ onClose }) {
         }
     };
 
-    // ── Background Image Upload ───────────────────────────
     const handleBgUpload = (e) => {
         const file = e.target.files?.[0];
         if (!file) return;
@@ -74,35 +70,40 @@ export default function SettingsPanel({ onClose }) {
     return (
         <>
             <div className="overlay" onClick={onClose} />
-            <div className="settings-panel glass-strong animate-slide-in-up">
+            <div className="settings-panel animate-slide-in-up">
+                <div className="settings-handle-wrap">
+                    <div className="settings-handle" />
+                </div>
                 <div className="settings-header">
-                    <h2 className="settings-title">Reading Settings</h2>
-                    <button className="btn-icon" onClick={onClose}>✕</button>
+                    <h2 className="settings-title">Settings</h2>
+                    <button className="btn-icon" onClick={onClose}>
+                        <IconClose size={16} />
+                    </button>
                 </div>
 
                 <div className="settings-body">
                     {/* ─── Reading Mode ────────────────────── */}
-                    <section className="settings-section">
+                    <section className="settings-card">
                         <h3 className="section-label">Reading Mode</h3>
                         <div className="toggle-group">
                             <button
                                 className={`toggle-btn ${settings.readingMode === 'paginated' ? 'active' : ''}`}
                                 onClick={() => updateSetting('readingMode', 'paginated')}
                             >
-                                📖 Paginated
+                                Paginated
                             </button>
                             <button
                                 className={`toggle-btn ${settings.readingMode === 'scroll' ? 'active' : ''}`}
                                 onClick={() => updateSetting('readingMode', 'scroll')}
                             >
-                                📜 Scroll
+                                Scroll
                             </button>
                         </div>
                     </section>
 
                     {/* ─── Font ────────────────────────────── */}
-                    <section className="settings-section">
-                        <h3 className="section-label">Font</h3>
+                    <section className="settings-card">
+                        <h3 className="section-label">Typeface</h3>
                         <div className="font-grid">
                             {allFonts.map(font => (
                                 <div key={font.id} className="font-btn-wrapper">
@@ -119,17 +120,16 @@ export default function SettingsPanel({ onClose }) {
                                             onClick={(e) => { e.stopPropagation(); handleRemoveCustomFont(font.id); }}
                                             title="Remove font"
                                         >
-                                            ✕
+                                            <IconClose size={10} />
                                         </button>
                                     )}
                                 </div>
                             ))}
-                            {/* Upload font button */}
                             <button
                                 className="font-btn font-upload-btn"
                                 onClick={() => fontInputRef.current?.click()}
                             >
-                                + Font
+                                <IconPlus size={13} /> Upload
                             </button>
                             <input
                                 ref={fontInputRef}
@@ -142,7 +142,7 @@ export default function SettingsPanel({ onClose }) {
                     </section>
 
                     {/* ─── Typography Controls ─────────────── */}
-                    <section className="settings-section">
+                    <section className="settings-card">
                         <h3 className="section-label">Typography</h3>
 
                         <div className="slider-row">
@@ -212,26 +212,26 @@ export default function SettingsPanel({ onClose }) {
                     </section>
 
                     {/* ─── Text Alignment ──────────────────── */}
-                    <section className="settings-section">
+                    <section className="settings-card">
                         <h3 className="section-label">Text Alignment</h3>
                         <div className="toggle-group">
                             <button
                                 className={`toggle-btn ${settings.textAlign === 'left' ? 'active' : ''}`}
                                 onClick={() => updateSetting('textAlign', 'left')}
                             >
-                                ≡ Left
+                                Left
                             </button>
                             <button
                                 className={`toggle-btn ${settings.textAlign === 'justify' ? 'active' : ''}`}
                                 onClick={() => updateSetting('textAlign', 'justify')}
                             >
-                                ≣ Justified
+                                Justified
                             </button>
                         </div>
                     </section>
 
                     {/* ─── Dictionary Mode ──────────────────── */}
-                    <section className="settings-section">
+                    <section className="settings-card">
                         <h3 className="section-label">Dictionary Translation</h3>
                         <div className="toggle-group">
                             <button
@@ -250,42 +250,36 @@ export default function SettingsPanel({ onClose }) {
                     </section>
 
                     {/* ─── Text-to-Speech ────────────────────── */}
-                    <section className="settings-section">
+                    <section className="settings-card">
                         <h3 className="section-label">Text-to-Speech</h3>
 
-                        {/* Engine selector */}
                         <div className="toggle-group">
                             <button
                                 className={`toggle-btn ${(settings.ttsEngine || 'cloud') === 'cloud' ? 'active' : ''}`}
                                 onClick={() => updateSetting('ttsEngine', 'cloud')}
                             >
-                                ☁️ Cloud
+                                Cloud
                             </button>
                             <button
                                 className={`toggle-btn ${(settings.ttsEngine) === 'system' ? 'active' : ''}`}
                                 onClick={() => updateSetting('ttsEngine', 'system')}
                             >
-                                🗣 System
+                                System
                             </button>
                         </div>
 
                         {(settings.ttsEngine || 'cloud') === 'cloud' && (
-                            <div className="tts-kokoro-info">
-                                <span className="slider-label" style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-                                    ☁️ Microsoft Edge Neural Voices — high quality, requires internet
-                                </span>
+                            <div className="tts-info-note">
+                                Microsoft Edge Neural Voices — high quality, requires internet
                             </div>
                         )}
 
                         {settings.ttsEngine === 'system' && (
-                            <div className="tts-kokoro-info">
-                                <span className="slider-label" style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-                                    🗣 Uses your device's built-in voices — works offline, quality varies
-                                </span>
+                            <div className="tts-info-note">
+                                Uses your device's built-in voices — works offline, quality varies
                             </div>
                         )}
 
-                        {/* Speed */}
                         <div className="slider-row">
                             <span className="slider-label">Speed</span>
                             <input
@@ -299,7 +293,6 @@ export default function SettingsPanel({ onClose }) {
                             <span className="slider-value">{(settings.ttsRate || 1.0).toFixed(1)}x</span>
                         </div>
 
-                        {/* Pitch (system engine only) */}
                         {(settings.ttsEngine) === 'system' && (
                             <div className="slider-row">
                                 <span className="slider-label">Pitch</span>
@@ -315,23 +308,21 @@ export default function SettingsPanel({ onClose }) {
                             </div>
                         )}
 
-                        {/* Multi-voice toggle */}
                         <div className="toggle-group">
                             <button
                                 className={`toggle-btn ${settings.ttsMultiVoice !== false ? 'active' : ''}`}
                                 onClick={() => updateSetting('ttsMultiVoice', true)}
                             >
-                                🎭 Character Voices
+                                Character Voices
                             </button>
                             <button
                                 className={`toggle-btn ${settings.ttsMultiVoice === false ? 'active' : ''}`}
                                 onClick={() => updateSetting('ttsMultiVoice', false)}
                             >
-                                🗣 Single Voice
+                                Single Voice
                             </button>
                         </div>
 
-                        {/* Narrator voice selector */}
                         {(() => {
                             const engineType = settings.ttsEngine || 'cloud';
                             const presets = VOICE_PRESETS[engineType] || VOICE_PRESETS.cloud;
@@ -352,7 +343,7 @@ export default function SettingsPanel({ onClose }) {
                                     >
                                         {voices.map(v => (
                                             <option key={v.id} value={v.id}>
-                                                {v.label} {v.gender === 'male' ? '♂' : '♀'}
+                                                {v.label}
                                             </option>
                                         ))}
                                     </select>
@@ -360,13 +351,12 @@ export default function SettingsPanel({ onClose }) {
                             );
                         })()}
 
-                        {/* Highlight toggle */}
                         <div className="toggle-group">
                             <button
                                 className={`toggle-btn ${settings.ttsHighlight !== false ? 'active' : ''}`}
                                 onClick={() => updateSetting('ttsHighlight', true)}
                             >
-                                ✨ Highlight On
+                                Highlight On
                             </button>
                             <button
                                 className={`toggle-btn ${settings.ttsHighlight === false ? 'active' : ''}`}
@@ -376,25 +366,24 @@ export default function SettingsPanel({ onClose }) {
                             </button>
                         </div>
 
-                        {/* Auto-advance toggle */}
                         <div className="toggle-group">
                             <button
                                 className={`toggle-btn ${settings.ttsAutoAdvance !== false ? 'active' : ''}`}
                                 onClick={() => updateSetting('ttsAutoAdvance', true)}
                             >
-                                📖 Auto-Advance
+                                Auto-Advance
                             </button>
                             <button
                                 className={`toggle-btn ${settings.ttsAutoAdvance === false ? 'active' : ''}`}
                                 onClick={() => updateSetting('ttsAutoAdvance', false)}
                             >
-                                ⏹ Manual
+                                Manual
                             </button>
                         </div>
                     </section>
 
                     {/* ─── Background Image ───────────────── */}
-                    <section className="settings-section">
+                    <section className="settings-card">
                         <h3 className="section-label">Background Image</h3>
                         <div className="bg-image-controls">
                             {settings.readerBgImage ? (
@@ -413,7 +402,7 @@ export default function SettingsPanel({ onClose }) {
                                         className="toggle-btn"
                                         onClick={() => updateSetting('readerBgImage', null)}
                                     >
-                                        ✕ Remove
+                                        Remove
                                     </button>
                                 </div>
                             ) : (
@@ -421,7 +410,7 @@ export default function SettingsPanel({ onClose }) {
                                     className="toggle-btn"
                                     onClick={() => bgInputRef.current?.click()}
                                 >
-                                    🖼️ Choose Image
+                                    Choose Image
                                 </button>
                             )}
                             <input
@@ -449,7 +438,7 @@ export default function SettingsPanel({ onClose }) {
                     </section>
 
                     {/* ─── Themes ──────────────────────────── */}
-                    <section className="settings-section">
+                    <section className="settings-card">
                         <h3 className="section-label">Theme</h3>
                         <div className="theme-grid">
                             {Object.values(THEMES).map(theme => (
@@ -462,17 +451,18 @@ export default function SettingsPanel({ onClose }) {
                                         className="theme-preview"
                                         style={{
                                             background: theme.bg,
-                                            borderColor: settings.theme === theme.id ? theme.accent : 'transparent',
+                                            borderColor: settings.theme === theme.id ? (theme.accent || theme.accentSecondary) : 'transparent',
                                         }}
                                     >
-                                        <div className="theme-preview-line" style={{ background: theme.text, opacity: 0.6 }} />
-                                        <div className="theme-preview-line short" style={{ background: theme.text, opacity: 0.4 }} />
+                                        <div className="theme-preview-lines">
+                                            <div className="theme-preview-line" style={{ background: theme.text, opacity: 0.6 }} />
+                                            <div className="theme-preview-line short" style={{ background: theme.text, opacity: 0.4 }} />
+                                        </div>
                                         <div className="theme-preview-dot" style={{ background: theme.accent }} />
                                     </div>
                                     <span className="theme-name">{theme.name}</span>
                                 </button>
                             ))}
-                            {/* Custom theme button */}
                             <button
                                 className={`theme-btn ${settings.theme === 'custom' ? 'active' : ''}`}
                                 onClick={() => {
@@ -484,10 +474,10 @@ export default function SettingsPanel({ onClose }) {
                                     className="theme-preview custom-preview"
                                     style={{
                                         background: settings.customTheme?.bg || '#1a1a2e',
-                                        borderColor: settings.theme === 'custom' ? (settings.customTheme?.accent || '#7c5cfc') : 'transparent',
+                                        borderColor: settings.theme === 'custom' ? (settings.customTheme?.accent || '#7E9078') : 'transparent',
                                     }}
                                 >
-                                    <span style={{ fontSize: '16px' }}>🎨</span>
+                                    <IconPalette size={16} style={{ color: settings.customTheme?.text || '#e0e0e0', opacity: 0.6 }} />
                                 </div>
                                 <span className="theme-name">Custom</span>
                             </button>
@@ -496,7 +486,7 @@ export default function SettingsPanel({ onClose }) {
 
                     {/* ─── Custom Theme Editor ─────────────── */}
                     {settings.theme === 'custom' && (
-                        <section className="settings-section custom-theme-editor animate-fade-in-up">
+                        <section className="settings-card custom-theme-editor animate-fade-in-up">
                             <h3 className="section-label">Custom Theme</h3>
                             <div className="color-row">
                                 <span className="color-label">Background</span>
@@ -524,7 +514,7 @@ export default function SettingsPanel({ onClose }) {
                                 <span className="color-label">Accent</span>
                                 <input
                                     type="color"
-                                    value={settings.customTheme?.accent || '#7c5cfc'}
+                                    value={settings.customTheme?.accent || '#7E9078'}
                                     onChange={e => handleCustomThemeChange('accent', e.target.value)}
                                 />
                             </div>
@@ -540,7 +530,7 @@ export default function SettingsPanel({ onClose }) {
                     )}
 
                     {/* ─── Preview ─────────────────────────── */}
-                    <section className="settings-section">
+                    <section className="settings-card">
                         <h3 className="section-label">Preview</h3>
                         <div
                             className="text-preview"
@@ -575,5 +565,14 @@ export default function SettingsPanel({ onClose }) {
                 </div>
             </div>
         </>
+    );
+}
+
+function IconPalette(p) {
+    return (
+        <svg width={p.size || 20} height={p.size || 20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" style={p.style}>
+            <path d="M12 22a10 10 0 1 1 10-10c0 2-2 3-4 3h-2a2 2 0 0 0-2 2v1c0 2-2 4-4 4h-2z" />
+            <circle cx="7.5" cy="10.5" r="1" fill="currentColor" /><circle cx="12" cy="7" r="1" fill="currentColor" /><circle cx="16.5" cy="10.5" r="1" fill="currentColor" />
+        </svg>
     );
 }

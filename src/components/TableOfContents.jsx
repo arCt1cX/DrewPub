@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from 'react';
+import { IconClose, IconArrowRight } from './Icons';
 import './TableOfContents.css';
 
 export default function TableOfContents({ toc, currentHref, onSelect, onClose }) {
@@ -16,7 +17,7 @@ export default function TableOfContents({ toc, currentHref, onSelect, onClose })
         return items.map((item, index) => {
             const itemBaseHref = item.href?.split('#')[0] || '';
             const currentBaseHref = currentHref?.split('#')[0] || '';
-            
+
             const isActive = currentHref && (currentHref === item.href || currentBaseHref === itemBaseHref);
 
             return (
@@ -28,7 +29,7 @@ export default function TableOfContents({ toc, currentHref, onSelect, onClose })
                         onClick={() => onSelect(item.href)}
                     >
                         <span className="toc-label">{item.label?.trim()}</span>
-                        {depth === 0 && <span className="toc-arrow">›</span>}
+                        {depth === 0 && <span className="toc-arrow"><IconArrowRight size={14} /></span>}
                     </button>
                     {item.subitems && item.subitems.length > 0 && renderItems(item.subitems, depth + 1)}
                 </div>
@@ -39,10 +40,12 @@ export default function TableOfContents({ toc, currentHref, onSelect, onClose })
     return (
         <>
             <div className="overlay" onClick={onClose} />
-            <div className="toc-panel glass-strong">
+            <div className="toc-panel">
                 <div className="toc-header">
-                    <h2 className="toc-title">Contents</h2>
-                    <button className="btn-icon" onClick={onClose}>✕</button>
+                    <h2 className="toc-title">Chapters</h2>
+                    <button className="btn-icon" onClick={onClose}>
+                        <IconClose size={16} />
+                    </button>
                 </div>
                 <div className="toc-body stagger-children">
                     {toc.length > 0 ? (

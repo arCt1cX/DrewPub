@@ -1,4 +1,5 @@
 import React from 'react';
+import { IconClose, IconLanguages } from './Icons';
 import './DictionaryPopup.css';
 
 export default function DictionaryPopup({ word, translation, loading, position, onClose }) {
@@ -8,7 +9,7 @@ export default function DictionaryPopup({ word, translation, loading, position, 
         <>
             <div className="dict-backdrop" onClick={onClose} />
             <div
-                className="dict-popup glass-strong animate-fade-in-up"
+                className="dict-popup animate-fade-in-up"
                 style={{
                     top: Math.min(position.y + 10, window.innerHeight - 200) + 'px',
                     left: Math.max(16, Math.min(position.x - 100, window.innerWidth - 216)) + 'px',
@@ -16,7 +17,9 @@ export default function DictionaryPopup({ word, translation, loading, position, 
             >
                 <div className="dict-header">
                     <span className="dict-word">{word}</span>
-                    <button className="dict-close" onClick={onClose}>✕</button>
+                    <button className="dict-close" onClick={onClose}>
+                        <IconClose size={14} />
+                    </button>
                 </div>
                 <div className="dict-body">
                     {loading ? (
@@ -25,7 +28,13 @@ export default function DictionaryPopup({ word, translation, loading, position, 
                             <span>Translating...</span>
                         </div>
                     ) : translation ? (
-                        <div className="dict-translation">{translation}</div>
+                        <div className="dict-translation-wrap">
+                            <div className="dict-translation-label">
+                                <IconLanguages size={12} />
+                                Translation
+                            </div>
+                            <div className="dict-translation">{translation}</div>
+                        </div>
                     ) : (
                         <div className="dict-error">Translation not found</div>
                     )}

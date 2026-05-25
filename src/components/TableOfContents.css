@@ -9,20 +9,21 @@
     z-index: 110;
     display: flex;
     flex-direction: column;
-    background: rgba(15, 15, 25, 0.95);
-    backdrop-filter: blur(30px) saturate(1.5);
-    -webkit-backdrop-filter: blur(30px) saturate(1.5);
+    background: var(--bg);
     animation: slideFromLeft var(--transition-slow) ease-out;
     border-right: 1px solid var(--border);
+    box-shadow: 10px 0 30px rgba(40,30,20,0.08);
 }
 
+[data-theme-mode="dark"] .toc-panel {
+    box-shadow: 10px 0 30px rgba(0,0,0,0.3);
+}
 
 @keyframes slideFromLeft {
     from {
         transform: translateX(-100%);
         opacity: 0;
     }
-
     to {
         transform: translateX(0);
         opacity: 1;
@@ -40,8 +41,11 @@
 }
 
 .toc-title {
-    font-size: 1.05rem;
-    font-weight: 600;
+    font-family: var(--font-serif);
+    font-style: italic;
+    font-size: 1.5rem;
+    font-weight: 400;
+    letter-spacing: -0.3px;
 }
 
 .toc-body {
@@ -59,41 +63,46 @@
     border: none;
     background: transparent;
     color: var(--text);
-    font-family: inherit;
-    font-size: 0.88rem;
+    font-family: var(--font-serif);
+    font-size: 0.95rem;
     cursor: pointer;
     text-align: left;
     transition: all var(--transition-fast);
     gap: 8px;
+    position: relative;
+    border-radius: 0 14px 14px 0;
+    margin-right: 8px;
 }
 
 .toc-item:hover {
-    background: rgba(255, 255, 255, 0.04);
+    background: var(--surface);
 }
 
 .toc-item:active {
-    background: rgba(255, 255, 255, 0.08);
+    background: var(--surface-warm);
 }
 
 .toc-item.active {
-    color: var(--accent);
-    background: rgba(124, 92, 252, 0.08);
+    color: var(--accent-deep);
+    background: rgba(126,144,120,0.1);
+    font-style: italic;
 }
 
 .toc-item.active::before {
     content: '';
     position: absolute;
     left: 0;
-    top: 0;
-    bottom: 0;
+    top: 4px;
+    bottom: 4px;
     width: 3px;
     background: var(--accent);
     border-radius: 0 2px 2px 0;
 }
 
 .toc-item.toc-sub {
-    font-size: 0.82rem;
+    font-size: 0.85rem;
     color: var(--text-secondary);
+    font-family: var(--font-sans);
 }
 
 .toc-label {
@@ -105,9 +114,10 @@
 }
 
 .toc-arrow {
-    font-size: 1rem;
     color: var(--text-secondary);
     flex-shrink: 0;
+    display: flex;
+    align-items: center;
 }
 
 .toc-empty {

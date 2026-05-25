@@ -85,14 +85,14 @@ export function SettingsProvider({ children }) {
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                background: '#1a1a2e',
-                color: '#e0e0e0',
+                background: '#F4ECE0',
+                color: '#2B2620',
             }}>
                 <div style={{ textAlign: 'center' }}>
                     <div style={{
                         width: 48, height: 48, margin: '0 auto 16px',
-                        border: '3px solid rgba(124,92,252,0.2)',
-                        borderTopColor: '#7c5cfc',
+                        border: '3px solid rgba(126,144,120,0.2)',
+                        borderTopColor: '#7E9078',
                         borderRadius: '50%',
                         animation: 'spin 0.8s linear infinite',
                     }} />

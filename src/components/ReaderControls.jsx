@@ -1,4 +1,5 @@
 import React from 'react';
+import { IconArrowLeft, IconMenu, IconSettings, IconVolume, IconArrowRight } from './Icons';
 import './ReaderControls.css';
 
 export default function ReaderControls({
@@ -20,9 +21,9 @@ export default function ReaderControls({
     return (
         <>
             {/* Top bar */}
-            <div className={`reader-top-bar glass ${visible ? 'visible' : ''}`}>
+            <div className={`reader-top-bar ${visible ? 'visible' : ''}`}>
                 <button className="btn-icon reader-btn" onClick={onBack} title="Back to Library">
-                    ←
+                    <IconArrowLeft size={17} />
                 </button>
                 <div className="reader-top-info">
                     <span className="reader-book-title">{bookTitle}</span>
@@ -34,21 +35,21 @@ export default function ReaderControls({
                         onClick={onToggleTts}
                         title="Text-to-Speech"
                     >
-                        🔊
+                        <IconVolume size={16} />
                     </button>
                     <button className="btn-icon reader-btn" onClick={onToggleToc} title="Table of Contents">
-                        ☰
+                        <IconMenu size={16} />
                     </button>
                     <button className="btn-icon reader-btn" onClick={onToggleSettings} title="Settings">
-                        ⚙
+                        <IconSettings size={16} />
                     </button>
                 </div>
             </div>
 
             {/* Bottom bar */}
-            <div className={`reader-bottom-bar glass ${visible ? 'visible' : ''}`}>
+            <div className={`reader-bottom-bar ${visible ? 'visible' : ''}`}>
                 <button className="reader-nav-btn" onClick={onPrev} title="Previous">
-                    ‹
+                    <IconArrowLeft size={18} />
                 </button>
                 <div className="reader-progress-section">
                     <div className="reader-progress-bar">
@@ -64,7 +65,7 @@ export default function ReaderControls({
                     </div>
                 </div>
                 <button className="reader-nav-btn" onClick={onNext} title="Next">
-                    ›
+                    <IconArrowRight size={18} />
                 </button>
             </div>
         </>

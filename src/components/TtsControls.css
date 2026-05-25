@@ -12,7 +12,7 @@
     gap: 6px;
     animation: tts-slide-up 0.3s ease-out;
     border-top: 1px solid var(--border);
-    /* Safe area for notched phones */
+    background: var(--bg);
     padding-bottom: max(16px, env(safe-area-inset-bottom));
 }
 
@@ -31,7 +31,7 @@
 
 .tts-progress-bar {
     height: 3px;
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--surface-warm);
     border-radius: 2px;
     overflow: hidden;
     margin-top: 8px;
@@ -56,7 +56,7 @@
 }
 
 .tts-speaker {
-    font-weight: 600;
+    font-weight: 500;
     color: var(--text);
     max-width: 60%;
     overflow: hidden;
@@ -69,16 +69,19 @@
 }
 
 .tts-speaker-icon {
-    font-size: 0.9rem;
     flex-shrink: 0;
+    display: flex;
+    align-items: center;
 }
 
 .tts-speaker-character {
-    color: var(--accent, #6cacf0);
+    color: var(--accent);
 }
 
 .tts-segment-count {
     font-variant-numeric: tabular-nums;
+    font-family: var(--font-serif);
+    font-style: italic;
 }
 
 /* ── Buttons row ── */
@@ -94,7 +97,6 @@
     background: transparent;
     border: none;
     color: var(--text);
-    font-size: 1.2rem;
     width: 36px;
     height: 36px;
     display: flex;
@@ -107,7 +109,7 @@
 }
 
 .tts-btn:hover {
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--surface);
 }
 
 .tts-btn:active {
@@ -122,15 +124,15 @@
 .tts-btn-main {
     width: 44px;
     height: 44px;
-    font-size: 1.4rem;
-    background: var(--accent);
+    background: var(--accent-secondary);
     color: white;
     border-radius: 50%;
+    box-shadow: 0 4px 12px rgba(201,123,95,0.3);
 }
 
 .tts-btn-main:hover {
-    background: var(--accent);
-    filter: brightness(1.15);
+    background: var(--accent-secondary);
+    filter: brightness(1.1);
 }
 
 .tts-btn-stop {
@@ -138,8 +140,16 @@
 }
 
 .tts-btn-chars {
-    color: var(--accent, #6cacf0);
-    font-size: 1.1rem;
+    color: var(--accent);
+}
+
+.tts-spinner-small {
+    width: 16px;
+    height: 16px;
+    border: 2px solid rgba(255,255,255,0.3);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
 }
 
 /* ── Speed control ── */
@@ -154,29 +164,6 @@
 .tts-speed-slider {
     width: 60px;
     height: 3px;
-    -webkit-appearance: none;
-    appearance: none;
-    background: rgba(255, 255, 255, 0.15);
-    border-radius: 2px;
-    outline: none;
-}
-
-.tts-speed-slider::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
-    background: var(--accent);
-    cursor: pointer;
-}
-
-.tts-speed-slider::-moz-range-thumb {
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
-    background: var(--accent);
-    cursor: pointer;
-    border: none;
 }
 
 .tts-speed-label {

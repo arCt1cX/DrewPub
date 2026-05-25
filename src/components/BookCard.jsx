@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { deleteBook, updateBookMeta } from '../db';
+import { IconTrash, IconMore, IconMoreH } from './Icons';
 import './BookCard.css';
 
 export default function BookCard({ book, viewMode, onDelete }) {
@@ -17,7 +18,7 @@ export default function BookCard({ book, viewMode, onDelete }) {
         e.stopPropagation();
         const confirmed = window.confirm(`Are you sure you want to remove "${book.title}"?`);
         if (!confirmed) return;
-        
+
         setShowMenu(false);
         try {
             await deleteBook(book.id);
@@ -61,12 +62,12 @@ export default function BookCard({ book, viewMode, onDelete }) {
                     className="book-menu-btn"
                     onClick={e => { e.stopPropagation(); setShowMenu(!showMenu); }}
                 >
-                    ⋯
+                    <IconMoreH size={18} />
                 </button>
                 {showMenu && (
-                    <div className="book-menu glass-strong" onClick={e => e.stopPropagation()}>
+                    <div className="book-menu" onClick={e => e.stopPropagation()}>
                         <button className="book-menu-item delete" onClick={handleDelete}>
-                            🗑 Remove
+                            <IconTrash size={15} /> Remove
                         </button>
                     </div>
                 )}
@@ -100,7 +101,7 @@ export default function BookCard({ book, viewMode, onDelete }) {
                     className="book-menu-trigger"
                     onClick={e => { e.stopPropagation(); setShowMenu(!showMenu); }}
                 >
-                    ⋮
+                    <IconMore size={16} />
                 </button>
             </div>
             <div className="book-meta">
@@ -108,9 +109,9 @@ export default function BookCard({ book, viewMode, onDelete }) {
                 <p className="book-author">{book.author || 'Unknown Author'}</p>
             </div>
             {showMenu && (
-                <div className="book-menu glass-strong" onClick={e => e.stopPropagation()}>
+                <div className="book-menu" onClick={e => e.stopPropagation()}>
                     <button className="book-menu-item delete" onClick={handleDelete}>
-                        🗑 Remove Book
+                        <IconTrash size={15} /> Remove Book
                     </button>
                 </div>
             )}

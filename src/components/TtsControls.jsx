@@ -1,4 +1,5 @@
 import React from 'react';
+import { IconPlay, IconPause, IconSkipBack, IconSkipForward, IconVolume, IconBookOpen, IconMic } from './Icons';
 import './TtsControls.css';
 
 export default function TtsControls({
@@ -25,7 +26,7 @@ export default function TtsControls({
         : 0;
 
     return (
-        <div className="tts-controls glass">
+        <div className="tts-controls">
             {/* Progress bar */}
             <div className="tts-progress-bar">
                 <div className="tts-progress-fill" style={{ width: `${progress}%` }} />
@@ -34,9 +35,11 @@ export default function TtsControls({
             {/* Speaker info */}
             <div className="tts-info">
                 <span className={`tts-speaker ${currentSpeaker && currentSpeaker !== 'Narrator' ? 'tts-speaker-character' : ''}`}>
-                    {loading ? '⏳ Generating...' : (
+                    {loading ? 'Generating...' : (
                         <>
-                            <span className="tts-speaker-icon">{currentSpeaker && currentSpeaker !== 'Narrator' ? '🗣' : '📖'}</span>
+                            <span className="tts-speaker-icon">
+                                {currentSpeaker && currentSpeaker !== 'Narrator' ? <IconMic size={13} /> : <IconBookOpen size={13} />}
+                            </span>
                             {currentSpeaker || 'Narrator'}
                         </>
                     )}
@@ -49,7 +52,7 @@ export default function TtsControls({
             {/* Controls */}
             <div className="tts-buttons">
                 <button className="tts-btn" onClick={onPrev} title="Previous segment" disabled={loading}>
-                    ⏮
+                    <IconSkipBack size={16} />
                 </button>
 
                 <button
@@ -58,15 +61,21 @@ export default function TtsControls({
                     title={playing ? 'Pause' : 'Play'}
                     disabled={loading}
                 >
-                    {loading ? '⏳' : (playing ? '⏸' : '▶')}
+                    {loading ? (
+                        <div className="tts-spinner-small" />
+                    ) : playing ? (
+                        <IconPause size={18} />
+                    ) : (
+                        <IconPlay size={18} />
+                    )}
                 </button>
 
                 <button className="tts-btn" onClick={onNext} title="Next segment" disabled={loading}>
-                    ⏭
+                    <IconSkipForward size={16} />
                 </button>
 
                 <button className="tts-btn tts-btn-stop" onClick={onStop} title="Stop TTS">
-                    ⏹
+                    <IconClose size={14} />
                 </button>
 
                 <button
@@ -74,7 +83,7 @@ export default function TtsControls({
                     onClick={onShowCharacters}
                     title="Characters & Voices"
                 >
-                    🎭
+                    <IconVolume size={15} />
                 </button>
 
                 {/* Speed control */}
@@ -93,5 +102,13 @@ export default function TtsControls({
                 </div>
             </div>
         </div>
+    );
+}
+
+function IconClose(p) {
+    return (
+        <svg width={p.size || 16} height={p.size || 16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+            <rect x="3" y="3" width="18" height="18" rx="2" />
+        </svg>
     );
 }

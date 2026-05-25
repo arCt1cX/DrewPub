@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Header from '../components/Header';
 import BookCard from '../components/BookCard';
 import SettingsPanel from '../components/SettingsPanel';
+import { IconSearch, IconClose, IconDownload, IconArrowLeft, IconArrowRight, IconPlus, IconBookOpen } from '../components/Icons';
 import { getAllBooks, addBook } from '../db';
 import { parseEpub, generateId } from '../utils/epub';
 import { useSettings } from '../contexts/SettingsContext';
@@ -262,11 +263,8 @@ export default function Library() {
 
             {/* ─── Search Bar ───────────────────────────── */}
             <div className="search-section">
-                <div className="search-bar glass">
-                    <svg className="search-bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <circle cx="11" cy="11" r="8" />
-                        <path d="M21 21l-4.35-4.35" />
-                    </svg>
+                <div className="search-bar">
+                    <IconSearch size={16} className="search-bar-icon" />
                     <input
                         ref={searchInputRef}
                         type="text"
@@ -278,7 +276,7 @@ export default function Library() {
                     />
                     {searchQuery && (
                         <button className="search-clear-btn" onClick={clearSearch} title="Clear search">
-                            ✕
+                            <IconClose size={14} />
                         </button>
                     )}
                     <button
@@ -321,7 +319,6 @@ export default function Library() {
 
                         {searchError && (
                             <div className="search-error animate-fade-in">
-                                <span className="search-error-icon">⚠</span>
                                 <p>{searchError}</p>
                             </div>
                         )}
@@ -343,7 +340,7 @@ export default function Library() {
                             <>
                                 <div className="search-results-grid stagger-children">
                                     {searchResults.map((result, idx) => (
-                                        <div key={result.detailUrl + idx} className="search-result-card glass">
+                                        <div key={result.detailUrl + idx} className="search-result-card">
                                             <div className="search-result-cover">
                                                 {result.cover ? (
                                                     <img
@@ -354,7 +351,7 @@ export default function Library() {
                                                     />
                                                 ) : (
                                                     <div className="search-result-no-cover">
-                                                        <span>📖</span>
+                                                        <IconBookOpen size={24} />
                                                     </div>
                                                 )}
                                             </div>
@@ -377,7 +374,7 @@ export default function Library() {
                                                         </>
                                                     ) : (
                                                         <>
-                                                            <span className="download-icon">↓</span>
+                                                            <IconDownload size={13} />
                                                             <span>Get EPUB</span>
                                                         </>
                                                     )}
@@ -395,7 +392,7 @@ export default function Library() {
                                                 className="pagination-btn"
                                                 onClick={() => handleSearch(searchPage - 1)}
                                             >
-                                                ← Prev
+                                                <IconArrowLeft size={14} /> Prev
                                             </button>
                                         )}
                                         <span className="pagination-info">
@@ -403,10 +400,10 @@ export default function Library() {
                                         </span>
                                         {searchPagination.hasNext && (
                                             <button
-                                                className="pagination-btn"
+                                                className="pagination-btn pagination-btn-next"
                                                 onClick={() => handleSearch(searchPage + 1)}
                                             >
-                                                Next →
+                                                Next <IconArrowRight size={14} />
                                             </button>
                                         )}
                                     </div>
@@ -432,18 +429,7 @@ export default function Library() {
                 ) : books.length === 0 && !showSearchResults ? (
                     <div className="library-empty animate-fade-in-up">
                         <div className="empty-illustration">
-                            <svg width="120" height="120" viewBox="0 0 120 120" fill="none">
-                                <rect x="20" y="15" width="35" height="50" rx="4" fill="var(--surface)" stroke="var(--border)" strokeWidth="1.5" />
-                                <rect x="25" y="22" width="18" height="2" rx="1" fill="var(--accent)" opacity="0.4" />
-                                <rect x="25" y="27" width="22" height="2" rx="1" fill="var(--text-secondary)" opacity="0.3" />
-                                <rect x="25" y="32" width="15" height="2" rx="1" fill="var(--text-secondary)" opacity="0.3" />
-                                <rect x="65" y="25" width="35" height="50" rx="4" fill="var(--surface)" stroke="var(--border)" strokeWidth="1.5" />
-                                <rect x="70" y="32" width="18" height="2" rx="1" fill="var(--accent)" opacity="0.4" />
-                                <rect x="70" y="37" width="22" height="2" rx="1" fill="var(--text-secondary)" opacity="0.3" />
-                                <rect x="70" y="42" width="15" height="2" rx="1" fill="var(--text-secondary)" opacity="0.3" />
-                                <circle cx="60" cy="90" r="16" fill="var(--accent)" opacity="0.1" />
-                                <text x="60" y="95" textAnchor="middle" fill="var(--accent)" fontSize="20" fontWeight="300">+</text>
-                            </svg>
+                            <IconBookOpen size={64} stroke={1} style={{ color: 'var(--accent)', opacity: 0.5 }} />
                         </div>
                         <h2 className="empty-title">Your library is empty</h2>
                         <p className="empty-desc">
@@ -451,7 +437,7 @@ export default function Library() {
                             Drag & drop files here or tap the button below.
                         </p>
                         <button className="btn btn-primary" onClick={handleUploadClick}>
-                            <span>+</span> Add Your First Book
+                            <IconPlus size={16} stroke={2.2} /> Add Your First Book
                         </button>
                     </div>
                 ) : (
@@ -472,7 +458,7 @@ export default function Library() {
 
             {uploading && (
                 <div className="upload-overlay">
-                    <div className="upload-modal glass-strong animate-scale-in">
+                    <div className="upload-modal animate-scale-in">
                         <div className="spinner" />
                         <p>Importing books...</p>
                     </div>
@@ -482,7 +468,9 @@ export default function Library() {
             {dragOver && (
                 <div className="drag-overlay animate-fade-in">
                     <div className="drag-content">
-                        <div className="drag-icon">📚</div>
+                        <div className="drag-icon">
+                            <IconBookOpen size={48} stroke={1.2} />
+                        </div>
                         <p>Drop EPUB files here</p>
                     </div>
                 </div>

@@ -9,9 +9,7 @@
     display: flex;
     align-items: center;
     transition: transform var(--transition-normal), opacity var(--transition-normal);
-    background: rgba(10, 10, 15, 0.85);
-    backdrop-filter: blur(20px) saturate(1.5);
-    -webkit-backdrop-filter: blur(20px) saturate(1.5);
+    background: var(--bg);
     border: none;
 }
 
@@ -44,18 +42,15 @@
 /* ─── Top Bar ────────────────────────────────────────── */
 
 .reader-btn {
-    background: rgba(255, 255, 255, 0.06);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    width: 38px;
-    height: 38px;
-    font-size: 1.15rem;
+    background: var(--surface);
+    width: 36px;
+    height: 36px;
     flex-shrink: 0;
 }
 
 .reader-btn-active {
-    background: rgba(124, 92, 252, 0.2);
-    border-color: var(--accent);
-    box-shadow: 0 0 12px rgba(124, 92, 252, 0.3);
+    background: rgba(126,144,120,0.15);
+    color: var(--accent-deep);
 }
 
 .reader-top-info {
@@ -68,8 +63,9 @@
 }
 
 .reader-book-title {
-    font-size: 0.85rem;
-    font-weight: 600;
+    font-family: var(--font-serif);
+    font-size: 0.88rem;
+    font-weight: 400;
     color: var(--text);
     white-space: nowrap;
     overflow: hidden;
@@ -84,35 +80,34 @@
     overflow: hidden;
     text-overflow: ellipsis;
     max-width: 100%;
+    font-weight: 500;
 }
 
 .reader-top-actions {
     display: flex;
-    gap: 8px;
+    gap: 6px;
     flex-shrink: 0;
 }
 
 /* ─── Bottom Bar ─────────────────────────────────────── */
 
 .reader-nav-btn {
-    width: 40px;
-    height: 40px;
+    width: 38px;
+    height: 38px;
     border: none;
-    border-radius: var(--radius-sm);
-    background: rgba(255, 255, 255, 0.06);
+    border-radius: 50%;
+    background: var(--surface);
     color: var(--text);
-    font-size: 1.6rem;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
     transition: all var(--transition-fast);
-    line-height: 1;
 }
 
 .reader-nav-btn:hover {
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--surface-warm);
 }
 
 .reader-nav-btn:active {
@@ -129,7 +124,7 @@
 .reader-progress-bar {
     width: 100%;
     height: 4px;
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--surface-warm);
     border-radius: 2px;
     overflow: hidden;
 }
@@ -139,24 +134,13 @@
     background: var(--accent);
     border-radius: 2px;
     transition: width var(--transition-normal);
-    position: relative;
-}
-
-.reader-progress-fill::after {
-    content: '';
-    position: absolute;
-    right: 0;
-    top: -2px;
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--accent);
-    box-shadow: 0 0 8px rgba(124, 92, 252, 0.5);
 }
 
 .reader-progress-info {
     display: flex;
     justify-content: space-between;
+    font-family: var(--font-serif);
+    font-style: italic;
     font-size: 0.72rem;
     color: var(--text-secondary);
 }

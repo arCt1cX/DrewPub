@@ -1,16 +1,13 @@
 import React from 'react';
 import { VOICE_PRESETS } from '../utils/ttsEngine';
+import { IconClose, IconMic, IconVolume } from './Icons';
 import './CharacterPanel.css';
 
-/**
- * Panel that shows all detected characters and lets the user
- * change their assigned TTS voice.
- */
 export default function CharacterPanel({
-    characters,       // { name: { gender, count } }
-    characterVoices,  // { name: voiceId }
-    engineType,       // 'cloud' | 'system'
-    onChangeVoice,    // (charName, voiceId, gender) => void
+    characters,
+    characterVoices,
+    engineType,
+    onChangeVoice,
     onClose,
 }) {
     const presets = VOICE_PRESETS[engineType || 'cloud'] || VOICE_PRESETS.cloud;
@@ -26,10 +23,15 @@ export default function CharacterPanel({
 
     if (sorted.length === 0) {
         return (
-            <div className="char-panel glass">
+            <div className="char-panel">
                 <div className="char-panel-header">
-                    <h3>🎭 Characters</h3>
-                    <button className="char-close-btn" onClick={onClose}>✕</button>
+                    <h3 className="char-panel-title">
+                        <IconMic size={15} />
+                        Characters
+                    </h3>
+                    <button className="char-close-btn" onClick={onClose}>
+                        <IconClose size={14} />
+                    </button>
                 </div>
                 <p className="char-empty">No characters detected yet. Start TTS to analyze the chapter.</p>
             </div>
@@ -37,10 +39,15 @@ export default function CharacterPanel({
     }
 
     return (
-        <div className="char-panel glass">
+        <div className="char-panel">
             <div className="char-panel-header">
-                <h3>🎭 Characters</h3>
-                <button className="char-close-btn" onClick={onClose}>✕</button>
+                <h3 className="char-panel-title">
+                    <IconMic size={15} />
+                    Characters
+                </h3>
+                <button className="char-close-btn" onClick={onClose}>
+                    <IconClose size={14} />
+                </button>
             </div>
             <div className="char-list">
                 {sorted.map(([name, info]) => {
@@ -50,7 +57,7 @@ export default function CharacterPanel({
                             <div className="char-info">
                                 <span className="char-name">{name}</span>
                                 <span className={`char-gender ${info.gender || 'unknown'}`}>
-                                    {info.gender === 'male' ? '♂' : info.gender === 'female' ? '♀' : '?'}
+                                    {info.gender === 'male' ? 'M' : info.gender === 'female' ? 'F' : '?'}
                                 </span>
                                 <span className="char-count">{info.count}×</span>
                             </div>
@@ -60,12 +67,12 @@ export default function CharacterPanel({
                                         className={`char-g-btn ${info.gender === 'male' ? 'active' : ''}`}
                                         onClick={() => onChangeVoice(name, currentVoice, 'male')}
                                         title="Set as male"
-                                    >♂</button>
+                                    >M</button>
                                     <button
                                         className={`char-g-btn ${info.gender === 'female' ? 'active' : ''}`}
                                         onClick={() => onChangeVoice(name, currentVoice, 'female')}
                                         title="Set as female"
-                                    >♀</button>
+                                    >F</button>
                                 </div>
                                 <select
                                     className="char-voice-select"
@@ -74,7 +81,7 @@ export default function CharacterPanel({
                                 >
                                     {voices.map(v => (
                                         <option key={v.id} value={v.id}>
-                                            {v.label} {v.gender === 'male' ? '♂' : '♀'}
+                                            {v.label} ({v.gender === 'male' ? 'M' : 'F'})
                                         </option>
                                     ))}
                                 </select>
