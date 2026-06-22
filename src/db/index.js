@@ -234,7 +234,7 @@ export async function getVoiceOverrides(bookId) {
 // chapters and the EPUB can be rebuilt locally from the full set.
 
 export async function saveNovelChapter(bookId, chapter) {
-    // chapter: { chapterId, num, title, html }
+    // chapter: { chapterId, num, title, html, cv }
     const db = await getDB();
     return db.put('novelChapters', {
         id: `${bookId}:${chapter.chapterId}`,
@@ -243,6 +243,7 @@ export async function saveNovelChapter(bookId, chapter) {
         num: chapter.num,
         title: chapter.title,
         html: chapter.html,
+        cv: chapter.cv ?? 0,
     });
 }
 

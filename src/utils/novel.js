@@ -23,6 +23,10 @@ import {
     pruneOrphanNovelChapters,
 } from '../db';
 
+// Bump when the chapter-text cleaning changes so older stored chapters are
+// re-fetched (v2: fixed ad-stripping that truncated chapters with mid-text ads).
+const CONTENT_VERSION = 2;
+
 const MAX_LIST_PAGES = 500;        // safety cap (~25k chapters)
 const LIST_PAGE_GAP = 500;         // ms between chapter-list pages
 const POST_LIST_COOLDOWN = 5000;   // ms to let the IP cool before the text phase
@@ -113,7 +117,9 @@ async function downloadInto({ bookId, meta, list, base, report, onCheckpoint }) 
     // Bring stored chapters' number/title in line with the (freshly parsed) list.
     await reconcileTitles(bookId, list);
 
-    const have = new Set((await getNovelChapters(bookId)).map(c => c.chapterId));
+    // Only chapters stored at the CURRENT content version count as "have"; stale
+    // ones (truncated by the old cleaner) are re-downloaded.
+    const have = new Set((await getNovelChapters(bookId)).filter(c => c.cv === CONTENT_VERSION).map(c => c.chapterId));
     const targets = list.filter(c => !have.has(c.id));
     const needsNetwork = targets.some(c => !reuse.has(c.id));
 
@@ -172,7 +178,7 @@ async function reconcileTitles(bookId, list) {
     for (const c of stored) {
         const r = ref.get(c.chapterId);
         if (r && (r.num !== c.num || (r.title || '') !== (c.title || ''))) {
-            await saveNovelChapter(bookId, { chapterId: c.chapterId, num: r.num, title: r.title, html: c.html });
+            await saveNovelChapter(bookId, { chapterId: c.chapterId, num: r.num, title: r.title, html: c.html, cv: c.cv ?? 0 });
         }
     }
 }
@@ -182,7 +188,11 @@ async function buildReuseMap() {
     const all = await getAllNovelChapters();
     const map = new Map();
     for (const c of all) {
-        if (c.chapterId && c.html && !map.has(c.chapterId)) map.set(c.chapterId, c.html);
+        // Only reuse text cleaned by the current version — never resurrect a
+        // truncated chapter from an older import.
+        if (c.chapterId && c.html && c.cv === CONTENT_VERSION && !map.has(c.chapterId)) {
+            map.set(c.chapterId, c.html);
+        }
     }
     return map;
 }
@@ -311,9 +321,9 @@ async function fetchTexts(targets, bookId, { reuse, checkpoint, onCount } = {}) 
     };
 
     for (const ch of targets) {
-        // Free reuse: we already have this chapter's text somewhere.
+        // Free reuse: we already have this chapter's (current-version) text.
         if (reuse && reuse.has(ch.id)) {
-            await saveNovelChapter(bookId, { chapterId: ch.id, num: ch.num, title: ch.title, html: reuse.get(ch.id) });
+            await saveNovelChapter(bookId, { chapterId: ch.id, num: ch.num, title: ch.title, html: reuse.get(ch.id), cv: CONTENT_VERSION });
             await advance();
             continue;
         }
@@ -330,7 +340,7 @@ async function fetchTexts(targets, bookId, { reuse, checkpoint, onCount } = {}) 
             const { status, ok, data } = result;
 
             if (ok && data && typeof data.content === 'string') {
-                await saveNovelChapter(bookId, { chapterId: ch.id, num: ch.num, title: ch.title, html: data.content });
+                await saveNovelChapter(bookId, { chapterId: ch.id, num: ch.num, title: ch.title, html: data.content, cv: CONTENT_VERSION });
                 consecutiveBlocks = 0;
                 gap = Math.max(GAP_MIN, gap - GAP_STEP_DOWN); // speed back up on success
                 settled = true;
@@ -352,7 +362,7 @@ async function fetchTexts(targets, bookId, { reuse, checkpoint, onCount } = {}) 
             // Permanent (4xx / locked / empty): record a placeholder and move on.
             await saveNovelChapter(bookId, {
                 chapterId: ch.id, num: ch.num, title: ch.title,
-                html: `<p>[Chapter unavailable]</p>`,
+                html: `<p>[Chapter unavailable]</p>`, cv: CONTENT_VERSION,
             });
             consecutiveBlocks = 0;
             settled = true;

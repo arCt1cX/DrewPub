@@ -31,20 +31,23 @@ export async function onRequestGet(context) {
     }
 }
 
-// Strip ads/scripts and reduce the obfuscated <div> soup to clean <p> paragraphs.
+// Reduce the obfuscated <div> soup to clean <p> paragraphs.
+// NOTE: we do NOT try to delete ad containers by span-matching — their markup
+// varies (some put a <script> between the inner and outer </div>, which made a
+// greedy match swallow the rest of the chapter). Instead we drop scripts/styles
+// /comments, then keep only <div> blocks that still contain text; ad blocks
+// reduce to empty and are skipped, while real paragraphs survive intact.
 function clean(html) {
     let s = html;
-    // Drop ad containers entirely.
-    s = s.replace(/<div[^>]*class="[^"]*advertisment[^"]*"[\s\S]*?<\/div>\s*<\/div>/gi, '');
-    // Drop any leftover scripts/styles/iframes.
     s = s.replace(/<script[\s\S]*?<\/script>/gi, '');
     s = s.replace(/<style[\s\S]*?<\/style>/gi, '');
     s = s.replace(/<iframe[\s\S]*?<\/iframe>/gi, '');
-    // Unwrap the outer chapter-text container.
+    s = s.replace(/<!--[\s\S]*?-->/g, '');
+    // Unwrap the outer chapter-text container (its close is then an orphan, which
+    // the paragraph matcher harmlessly ignores).
     s = s.replace(/^\s*<div[^>]*class="[^"]*chapter-text[^"]*"[^>]*>/i, '');
-    s = s.replace(/<\/div>\s*$/i, '');
 
-    // Split remaining content into paragraphs from the inner <div> blocks.
+    // Keep each <div>…</div> block that has text after stripping inline tags.
     const parts = [];
     const blockRe = /<div[^>]*>([\s\S]*?)<\/div>/gi;
     let m;
