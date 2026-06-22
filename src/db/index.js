@@ -256,3 +256,29 @@ export async function getNovelChapterIds(bookId) {
     const all = await getNovelChapters(bookId);
     return new Set(all.map(c => c.chapterId));
 }
+
+// All stored novel chapters across every book — used to reuse already-downloaded
+// chapter text (by source chapterId) and to recover orphaned downloads.
+export async function getAllNovelChapters() {
+    const db = await getDB();
+    return db.getAll('novelChapters');
+}
+
+// Remove novelChapters whose book no longer exists (orphans from an import that
+// was interrupted before the book record was saved).
+export async function pruneOrphanNovelChapters() {
+    const db = await getDB();
+    const bookIds = new Set((await db.getAllKeys('books')));
+    const tx = db.transaction('novelChapters', 'readwrite');
+    let cursor = await tx.store.openCursor();
+    let removed = 0;
+    while (cursor) {
+        if (!bookIds.has(cursor.value.bookId)) {
+            await cursor.delete();
+            removed++;
+        }
+        cursor = await cursor.continue();
+    }
+    await tx.done;
+    return removed;
+}

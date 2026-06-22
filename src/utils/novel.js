@@ -15,11 +15,18 @@
 
 import JSZip from 'jszip';
 import { generateId } from './epub';
-import { saveNovelChapter, getNovelChapters } from '../db';
+import {
+    addBook,
+    saveNovelChapter,
+    getNovelChapters,
+    getAllNovelChapters,
+    pruneOrphanNovelChapters,
+} from '../db';
 
 const MAX_LIST_PAGES = 500;        // safety cap (~25k chapters)
 const LIST_PAGE_GAP = 500;         // ms between chapter-list pages
 const POST_LIST_COOLDOWN = 5000;   // ms to let the IP cool before the text phase
+const CHECKPOINT_EVERY = 50;       // persist progress every N saved chapters
 
 // Adaptive pacing for the text phase
 const GAP_START = 600;             // ms between chapter requests
@@ -32,10 +39,11 @@ const MAX_CONSECUTIVE_BLOCKS = 6;  // give up the run after this many in a row
 // ─── Public API ─────────────────────────────────────
 
 /**
- * Import a web novel into the library. Resumable — returns whatever was fetched.
- * `complete` is false if rate limiting cut the run short; resume via syncNovel.
+ * Import a web novel into the library. The book record is created up-front and
+ * checkpointed during download, so it's visible & resumable even if the run is
+ * interrupted. Returns the final (already-saved) book record.
  */
-export async function importNovel(url, { onProgress } = {}) {
+export async function importNovel(url, { onProgress, onCheckpoint } = {}) {
     const report = onProgress || (() => {});
 
     report('Fetching novel info…');
@@ -46,36 +54,17 @@ export async function importNovel(url, { onProgress } = {}) {
     if (list.length === 0) throw new Error('No chapters found for this novel');
 
     const bookId = generateId();
-
-    report('Pausing before download…');
-    await sleep(POST_LIST_COOLDOWN);
-
-    report(`Downloading chapters (0/${list.length})…`);
-    const { aborted } = await fetchTexts(list, bookId, (done) =>
-        report(`Downloading chapters (${done}/${list.length})…`)
-    );
-
-    report('Building EPUB…');
-    const stored = await getNovelChapters(bookId);
-    const data = await buildEpub(meta, epubChapters(stored));
-
-    return makeBookRecord({
-        id: bookId,
-        meta,
-        list,
-        fetched: stored.length,
-        aborted,
-        data,
-        base: { addedAt: Date.now(), progress: 0 },
-    });
+    const base = { addedAt: Date.now(), progress: 0 };
+    const result = await downloadInto({ bookId, meta, list, base, report, onCheckpoint });
+    return result.book;
 }
 
 /**
  * Check a web-novel book for new chapters AND backfill any not-yet-downloaded
- * ones (i.e. resume a partial import), then rebuild the EPUB.
- * @returns {Promise<{book: object|null, added: number, complete: boolean}>}
+ * ones (resume a partial import), persisting progress as it goes.
+ * @returns {Promise<{book: object, added: number, complete: boolean}>}
  */
-export async function syncNovel(book, { onProgress } = {}) {
+export async function syncNovel(book, { onProgress, onCheckpoint } = {}) {
     const report = onProgress || (() => {});
     if (book.sourceType !== 'webnovel') throw new Error('Not a web novel');
 
@@ -94,42 +83,87 @@ export async function syncNovel(book, { onProgress } = {}) {
         }
     }
 
-    const existing = await getNovelChapters(book.id);
-    const before = existing.length;
-    const have = new Set(existing.map(c => c.chapterId));
-    const missing = list.filter(c => !have.has(c.id));
+    const before = (await getNovelChapters(book.id)).length;
+    const meta = {
+        title: book.title, author: book.author, cover: book.cover,
+        sourceUrl: book.sourceUrl, sourceBookId: book.sourceBookId,
+    };
+    const result = await downloadInto({ bookId: book.id, meta, list, base: book, report, onCheckpoint });
+    const added = result.fetched - before;
 
-    if (missing.length === 0) {
-        report('Already up to date');
-        // Persist the (possibly newly built) list even when nothing to download.
-        return { book: { ...book, chapterList: list, chapterCount: list.length }, added: 0, complete: true };
+    report(result.book.complete
+        ? (added > 0 ? `Added ${added} chapter${added !== 1 ? 's' : ''}` : 'Already up to date')
+        : `Added ${added} (more remain)`);
+    return { book: result.book, added, complete: result.book.complete };
+}
+
+// Shared download pipeline: persist a pending book, reuse already-downloaded
+// chapters, fetch the rest with adaptive pacing + checkpoints, build the EPUB.
+async function downloadInto({ bookId, meta, list, base, report, onCheckpoint }) {
+    // Reuse any chapter text we already have (this book's prior partial run, or
+    // orphaned downloads from an interrupted import) — keyed by source id.
+    report('Checking local cache…');
+    const reuse = await buildReuseMap();
+
+    const have = new Set((await getNovelChapters(bookId)).map(c => c.chapterId));
+    const targets = list.filter(c => !have.has(c.id));
+    const needsNetwork = targets.some(c => !reuse.has(c.id));
+
+    // Persist a pending record immediately so it shows up and can be resumed.
+    const placeholder = await buildEpub(meta, epubChapters([]));
+    let book = await persist({ bookId, meta, list, fetched: have.size, aborted: false, data: placeholder, base });
+    await onCheckpoint?.();
+
+    if (targets.length === 0) {
+        const stored = await getNovelChapters(bookId);
+        const data = await buildEpub(meta, epubChapters(stored));
+        book = await persist({ bookId, meta, list, fetched: stored.length, aborted: false, data, base });
+        await onCheckpoint?.();
+        await pruneOrphanNovelChapters();
+        return { book, fetched: stored.length };
     }
 
-    report(`Downloading chapters (0/${missing.length})…`);
-    const { aborted } = await fetchTexts(missing, book.id, (done) =>
-        report(`Downloading chapters (${done}/${missing.length})…`)
-    );
+    if (needsNetwork) {
+        report('Pausing before download…');
+        await sleep(POST_LIST_COOLDOWN);
+    }
 
-    report('Rebuilding EPUB…');
-    const all = await getNovelChapters(book.id);
-    const data = await buildEpub(
-        { title: book.title, author: book.author, cover: book.cover },
-        epubChapters(all)
-    );
+    const checkpoint = async () => {
+        const n = (await getNovelChapters(bookId)).length;
+        book = await persist({ bookId, meta, list, fetched: n, aborted: false, data: placeholder, base });
+        await onCheckpoint?.();
+    };
 
-    const added = all.length - before;
-    const updated = makeBookRecord({
-        id: book.id,
-        meta: { title: book.title, author: book.author, cover: book.cover, sourceUrl: book.sourceUrl, sourceBookId: book.sourceBookId },
-        list,
-        fetched: all.length,
-        aborted,
-        data,
-        base: book,
+    report(`Downloading chapters (0/${targets.length})…`);
+    const { aborted } = await fetchTexts(targets, bookId, {
+        reuse,
+        checkpoint,
+        onCount: (done) => report(`Downloading chapters (${done}/${targets.length})…`),
     });
 
-    report(updated.complete ? `Added ${added} chapter${added !== 1 ? 's' : ''}` : `Added ${added} (more remain)`);
-    return { book: updated, added, complete: updated.complete };
+    report('Building EPUB…');
+    const stored = await getNovelChapters(bookId);
+    const data = await buildEpub(meta, epubChapters(stored));
+    book = await persist({ bookId, meta, list, fetched: stored.length, aborted, data, base });
+    await onCheckpoint?.();
+    await pruneOrphanNovelChapters();
+    return { book, fetched: stored.length };
+}
+
+async function persist({ bookId, meta, list, fetched, aborted, data, base }) {
+    const book = makeBookRecord({ id: bookId, meta, list, fetched, aborted, data, base });
+    await addBook(book);
+    return book;
+}
+
+// Map of source chapterId → chapter text we already have stored anywhere.
+async function buildReuseMap() {
+    const all = await getAllNovelChapters();
+    const map = new Map();
+    for (const c of all) {
+        if (c.chapterId && c.html && !map.has(c.chapterId)) map.set(c.chapterId, c.html);
+    }
+    return map;
 }
 
 function makeBookRecord({ id, meta, list, fetched, aborted, data, base }) {
@@ -231,13 +265,31 @@ async function fetchNewChapters(sourceBookId, knownIds, report) {
 }
 
 // One-at-a-time text download with an adaptive inter-request gap. Persists each
-// chapter as it arrives; stops (aborted) on a sustained block, keeping progress.
-async function fetchTexts(targets, bookId, onCount) {
+// chapter as it arrives and checkpoints periodically; stops (aborted) on a
+// sustained block, keeping progress. Reuses already-downloaded text for free.
+async function fetchTexts(targets, bookId, { reuse, checkpoint, onCount } = {}) {
     let gap = GAP_START;
     let consecutiveBlocks = 0;
     let done = 0;
+    let sinceCheckpoint = 0;
+
+    const advance = async () => {
+        done++;
+        onCount?.(done);
+        if (++sinceCheckpoint >= CHECKPOINT_EVERY) {
+            sinceCheckpoint = 0;
+            if (checkpoint) await checkpoint(done);
+        }
+    };
 
     for (const ch of targets) {
+        // Free reuse: we already have this chapter's text somewhere.
+        if (reuse && reuse.has(ch.id)) {
+            await saveNovelChapter(bookId, { chapterId: ch.id, num: ch.num, title: ch.title, html: reuse.get(ch.id) });
+            await advance();
+            continue;
+        }
+
         let settled = false;
         while (!settled) {
             await sleep(gap);
@@ -254,8 +306,7 @@ async function fetchTexts(targets, bookId, onCount) {
                 consecutiveBlocks = 0;
                 gap = Math.max(GAP_MIN, gap - GAP_STEP_DOWN); // speed back up on success
                 settled = true;
-                done++;
-                onCount?.(done);
+                await advance();
                 continue;
             }
 
@@ -277,8 +328,7 @@ async function fetchTexts(targets, bookId, onCount) {
             });
             consecutiveBlocks = 0;
             settled = true;
-            done++;
-            onCount?.(done);
+            await advance();
         }
     }
     return { aborted: false, done };

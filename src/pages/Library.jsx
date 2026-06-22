@@ -52,7 +52,6 @@ export default function Library() {
         setNovelBusy('Starting…');
         try {
             const book = await importNovel(url, { onProgress: setNovelBusy });
-            await addBook(book);
             await loadBooks();
             clearSearch();
             setNovelBusy(book.complete
@@ -70,11 +69,8 @@ export default function Library() {
         if (novelBusy) return;
         setNovelBusy('Checking for new chapters…');
         try {
-            const { book: updated, added, complete } = await syncNovel(book, { onProgress: setNovelBusy });
-            if (updated) {
-                await addBook(updated);
-                await loadBooks();
-            }
+            const { added, complete } = await syncNovel(book, { onProgress: setNovelBusy });
+            await loadBooks();
             setNovelBusy(
                 added === 0 ? '✓ Already up to date'
                     : complete ? `✓ Added ${added} chapter${added !== 1 ? 's' : ''}`
