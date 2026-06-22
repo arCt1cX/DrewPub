@@ -68,9 +68,14 @@ export async function syncNovel(book, { onProgress, onCheckpoint } = {}) {
     const report = onProgress || (() => {});
     if (book.sourceType !== 'webnovel') throw new Error('Not a web novel');
 
+    // Repair mode: older imports stored some chapters with no number (decimal /
+    // titleless entries that failed the old parser). Re-list fully to fix them.
+    const stored0 = await getNovelChapters(book.id);
+    const needsRepair = stored0.some(c => c.num == null);
+
     // Reuse the cached chapter list; only scan the newest pages for additions.
     let list = Array.isArray(book.chapterList) ? book.chapterList.slice() : [];
-    if (list.length === 0) {
+    if (list.length === 0 || needsRepair) {
         report('Listing chapters…');
         list = await fetchFullList(book.sourceBookId, report);
     } else {
@@ -104,6 +109,9 @@ async function downloadInto({ bookId, meta, list, base, report, onCheckpoint }) 
     // orphaned downloads from an interrupted import) — keyed by source id.
     report('Checking local cache…');
     const reuse = await buildReuseMap();
+
+    // Bring stored chapters' number/title in line with the (freshly parsed) list.
+    await reconcileTitles(bookId, list);
 
     const have = new Set((await getNovelChapters(bookId)).map(c => c.chapterId));
     const targets = list.filter(c => !have.has(c.id));
@@ -156,6 +164,19 @@ async function persist({ bookId, meta, list, fetched, aborted, data, base }) {
     return book;
 }
 
+// Update stored chapters' num/title to match the list (cheap: only writes the
+// few that actually changed, e.g. decimal/titleless entries fixed by a re-parse).
+async function reconcileTitles(bookId, list) {
+    const ref = new Map(list.map(c => [c.id, c]));
+    const stored = await getNovelChapters(bookId);
+    for (const c of stored) {
+        const r = ref.get(c.chapterId);
+        if (r && (r.num !== c.num || (r.title || '') !== (c.title || ''))) {
+            await saveNovelChapter(bookId, { chapterId: c.chapterId, num: r.num, title: r.title, html: c.html });
+        }
+    }
+}
+
 // Map of source chapterId → chapter text we already have stored anywhere.
 async function buildReuseMap() {
     const all = await getAllNovelChapters();
@@ -193,7 +214,14 @@ function epubChapters(stored) {
     if (stored.length === 0) {
         return [{ title: 'Download pending', html: '<p>Chapters not downloaded yet. Open the ⋯ menu and tap “Check for new chapters” to download.</p>' }];
     }
-    return stored.map(c => ({ title: c.title, html: c.html }));
+    return stored.map(c => ({ title: chapterDisplayTitle(c), html: c.html }));
+}
+
+// "Chapter 1: Nightmare Begins" — number prefix from the source's chapter index.
+function chapterDisplayTitle(c) {
+    const t = (c.title || '').trim();
+    if (c.num == null) return t || 'Chapter';
+    return t ? `Chapter ${c.num}: ${t}` : `Chapter ${c.num}`;
 }
 
 // ─── Networking ─────────────────────────────────────

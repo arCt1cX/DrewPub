@@ -40,9 +40,10 @@ function parseChapters(html) {
     while ((m = anchorRe.exec(html)) !== null) {
         const id = m[1];
         const block = m[0];
-        const titleMatch = block.match(/<div class="title">\s*(\d+)\s*chapter\s*-\s*<span>([^<]*)<\/span>/i);
-        const num = titleMatch ? parseInt(titleMatch[1], 10) : null;
-        const title = titleMatch ? titleMatch[2].trim() : `Chapter ${id}`;
+        // Number may be decimal (side chapters like "2297.1"); title span is optional.
+        const titleMatch = block.match(/<div class="title">\s*([\d.]+)\s*chapter\s*(?:-\s*<span>([^<]*)<\/span>)?/i);
+        const num = titleMatch ? parseFloat(titleMatch[1]) : null;
+        const title = (titleMatch && titleMatch[2]) ? titleMatch[2].trim() : '';
         const dateMatch = block.match(/<span class="date">([^<]*)<\/span>/i);
         const date = dateMatch ? dateMatch[1].trim() : '';
         chapters.push({ id, num, title, date });
