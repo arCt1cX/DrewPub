@@ -1,13 +1,20 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { deleteBook, updateBookMeta } from '../db';
-import { IconTrash, IconMore, IconMoreH } from './Icons';
+import { IconTrash, IconMore, IconMoreH, IconRefresh } from './Icons';
 import './BookCard.css';
 
-export default function BookCard({ book, viewMode, onDelete }) {
+export default function BookCard({ book, viewMode, onDelete, onSync }) {
     const navigate = useNavigate();
     const [showMenu, setShowMenu] = useState(false);
     const [pressing, setPressing] = useState(false);
+    const isNovel = book.sourceType === 'webnovel';
+
+    const handleSync = (e) => {
+        e.stopPropagation();
+        setShowMenu(false);
+        onSync?.(book);
+    };
 
     const handleOpen = () => {
         updateBookMeta(book.id, { lastReadAt: Date.now() });
@@ -66,6 +73,11 @@ export default function BookCard({ book, viewMode, onDelete }) {
                 </button>
                 {showMenu && (
                     <div className="book-menu" onClick={e => e.stopPropagation()}>
+                        {isNovel && (
+                            <button className="book-menu-item" onClick={handleSync}>
+                                <IconRefresh size={15} /> Check for new chapters
+                            </button>
+                        )}
                         <button className="book-menu-item delete" onClick={handleDelete}>
                             <IconTrash size={15} /> Remove
                         </button>
@@ -110,6 +122,11 @@ export default function BookCard({ book, viewMode, onDelete }) {
             </div>
             {showMenu && (
                 <div className="book-menu" onClick={e => e.stopPropagation()}>
+                    {isNovel && (
+                        <button className="book-menu-item" onClick={handleSync}>
+                            <IconRefresh size={15} /> Check for new chapters
+                        </button>
+                    )}
                     <button className="book-menu-item delete" onClick={handleDelete}>
                         <IconTrash size={15} /> Remove Book
                     </button>

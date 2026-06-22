@@ -1,7 +1,7 @@
 import { openDB } from 'idb';
 
 const DB_NAME = 'drewpub-db';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 
 let dbPromise;
 
@@ -36,6 +36,12 @@ function getDB() {
                     const voStore = db.createObjectStore('voiceOverrides', { keyPath: 'id' });
                     voStore.createIndex('bookId', 'bookId');
                 }
+                // v4: Web-novel chapter source text (kept out of the books store
+                // so getAllBooks() doesn't pull megabytes of text on every render).
+                if (!db.objectStoreNames.contains('novelChapters')) {
+                    const ncStore = db.createObjectStore('novelChapters', { keyPath: 'id' });
+                    ncStore.createIndex('bookId', 'bookId');
+                }
             }
         });
     }
@@ -61,11 +67,21 @@ export async function getAllBooks() {
 
 export async function deleteBook(id) {
     const db = await getDB();
-    const tx = db.transaction(['books', 'positions', 'ttsCache', 'dialogueAnalysis', 'voiceOverrides'], 'readwrite');
-    
+    const tx = db.transaction(['books', 'positions', 'ttsCache', 'dialogueAnalysis', 'voiceOverrides', 'novelChapters'], 'readwrite');
+
     await Promise.all([
         tx.objectStore('books').delete(id),
         tx.objectStore('positions').delete(id),
+        // Clear web-novel source chapters for this book (using index)
+        (async () => {
+            const ncStore = tx.objectStore('novelChapters');
+            const ncIdx = ncStore.index('bookId');
+            let cursor = await ncIdx.openKeyCursor(IDBKeyRange.only(id));
+            while (cursor) {
+                await ncStore.delete(cursor.primaryKey);
+                cursor = await cursor.continue();
+            }
+        })(),
         // Clear TTS cache for this book (using index)
         (async () => {
             const ttsStore = tx.objectStore('ttsCache');
@@ -211,4 +227,32 @@ export async function getVoiceOverrides(bookId) {
     const db = await getDB();
     const record = await db.get('voiceOverrides', bookId);
     return record?.overrides || {};
+}
+
+// ─── Web-Novel Source Chapters ──────────────────────
+// Stores the cleaned source HTML per chapter so syncing only fetches NEW
+// chapters and the EPUB can be rebuilt locally from the full set.
+
+export async function saveNovelChapter(bookId, chapter) {
+    // chapter: { chapterId, num, title, html }
+    const db = await getDB();
+    return db.put('novelChapters', {
+        id: `${bookId}:${chapter.chapterId}`,
+        bookId,
+        chapterId: chapter.chapterId,
+        num: chapter.num,
+        title: chapter.title,
+        html: chapter.html,
+    });
+}
+
+export async function getNovelChapters(bookId) {
+    const db = await getDB();
+    const all = await db.getAllFromIndex('novelChapters', 'bookId', bookId);
+    return all.sort((a, b) => (a.num ?? 0) - (b.num ?? 0));
+}
+
+export async function getNovelChapterIds(bookId) {
+    const all = await getNovelChapters(bookId);
+    return new Set(all.map(c => c.chapterId));
 }

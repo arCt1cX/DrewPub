@@ -5,6 +5,7 @@ import SettingsPanel from '../components/SettingsPanel';
 import { IconSearch, IconClose, IconDownload, IconArrowLeft, IconArrowRight, IconPlus, IconBookOpen } from '../components/Icons';
 import { getAllBooks, addBook } from '../db';
 import { parseEpub, generateId } from '../utils/epub';
+import { importNovel, syncNovel, isNovelUrl } from '../utils/novel';
 import { useSettings } from '../contexts/SettingsContext';
 import './Library.css';
 
@@ -43,10 +44,56 @@ export default function Library() {
         loadBooks();
     }, [loadBooks]);
 
+    // ─── Web-Novel Import / Sync ────────────────────────
+    const [novelBusy, setNovelBusy] = useState('');
+
+    const handleImportNovel = async (url) => {
+        if (novelBusy) return;
+        setNovelBusy('Starting…');
+        try {
+            const book = await importNovel(url, { onProgress: setNovelBusy });
+            await addBook(book);
+            await loadBooks();
+            clearSearch();
+            setNovelBusy('✓ Added to library!');
+        } catch (err) {
+            console.error('Novel import failed:', err);
+            setNovelBusy(`✗ ${err.message}`);
+        } finally {
+            setTimeout(() => setNovelBusy(''), 3000);
+        }
+    };
+
+    const handleSyncBook = async (book) => {
+        if (novelBusy) return;
+        setNovelBusy('Checking for new chapters…');
+        try {
+            const { book: updated, added } = await syncNovel(book, { onProgress: setNovelBusy });
+            if (updated) {
+                await addBook(updated);
+                await loadBooks();
+                setNovelBusy(`✓ Added ${added} new chapter${added > 1 ? 's' : ''}`);
+            } else {
+                setNovelBusy('✓ Already up to date');
+            }
+        } catch (err) {
+            console.error('Novel sync failed:', err);
+            setNovelBusy(`✗ ${err.message}`);
+        } finally {
+            setTimeout(() => setNovelBusy(''), 3000);
+        }
+    };
+
     // ─── Search Logic ───────────────────────────────────
     const handleSearch = async (page = 1) => {
         const q = searchQuery.trim();
         if (!q) return;
+
+        // A pasted web-novel URL imports the novel instead of searching.
+        if (isNovelUrl(q)) {
+            handleImportNovel(q);
+            return;
+        }
 
         setSearching(true);
         setSearchError('');
@@ -269,7 +316,7 @@ export default function Library() {
                         ref={searchInputRef}
                         type="text"
                         className="search-input"
-                        placeholder="Search books on OceanOfPDF..."
+                        placeholder="Search OceanOfPDF, or paste a novelight.net link..."
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
                         onKeyDown={handleSearchKeyDown}
@@ -450,6 +497,7 @@ export default function Library() {
                                 book={book}
                                 viewMode={settings.libraryView}
                                 onDelete={handleDeleteBook}
+                                onSync={handleSyncBook}
                             />
                         ))}
                     </div>
@@ -461,6 +509,15 @@ export default function Library() {
                     <div className="upload-modal animate-scale-in">
                         <div className="spinner" />
                         <p>Importing books...</p>
+                    </div>
+                </div>
+            )}
+
+            {novelBusy && (
+                <div className="upload-overlay">
+                    <div className="upload-modal animate-scale-in">
+                        {!novelBusy.startsWith('✓') && !novelBusy.startsWith('✗') && <div className="spinner" />}
+                        <p>{novelBusy}</p>
                     </div>
                 </div>
             )}
