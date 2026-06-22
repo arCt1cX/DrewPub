@@ -397,7 +397,25 @@ export default function Reader() {
                 'color': theme.readerText + ' !important',
                 'font-family': `"${fontObj.family.replace(/['"]/g, '')}", serif !important`,
             },
-            'img': { 'max-width': '100% !important', 'height': 'auto !important' },
+            // Images: constrain to the page so they actually render (in paginated
+            // column layout an unconstrained-height image overflows into a blank
+            // column and looks "missing"). Cover both <img> and SVG-wrapped images.
+            'img': {
+                'max-width': '100% !important',
+                'max-height': (isPag ? '88vh' : 'none') + ' !important',
+                'height': 'auto !important',
+                'object-fit': 'contain',
+                'display': 'block',
+                'margin': '0.5em auto',
+            },
+            'svg': {
+                'max-width': '100% !important',
+                'max-height': (isPag ? '88vh' : 'none') + ' !important',
+                'height': 'auto !important',
+            },
+            'svg image': { 'max-width': '100% !important' },
+            'image': { 'max-width': '100% !important' },
+            'figure': { 'margin': '1em auto !important', 'max-width': '100% !important', 'text-align': 'center !important' },
         });
     }
 
