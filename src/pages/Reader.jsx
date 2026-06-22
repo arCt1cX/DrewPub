@@ -182,6 +182,47 @@ export default function Reader() {
                 }
                 doc.head.appendChild(style);
 
+                // ── Recover images epub.js didn't resolve ──────────────
+                // Decorative images (chapter dividers, ornaments) are sometimes
+                // missing from the OPF manifest, so epub.js leaves their src as
+                // an unresolved relative path → broken-image icon. Resolve those
+                // straight from the EPUB archive by matching the file name.
+                try {
+                    const book = bookRef.current;
+                    const zip = book?.archive?.zip;
+                    if (zip) {
+                        const XLINK = 'http://www.w3.org/1999/xlink';
+                        const fileKeys = Object.keys(zip.files);
+                        const findEntry = (raw) => {
+                            if (!raw) return null;
+                            const base = decodeURIComponent((raw.split('#')[0].split('?')[0].split('/').pop() || '')).toLowerCase();
+                            if (!base) return null;
+                            return fileKeys.find(f => f.toLowerCase().endsWith('/' + base) || f.toLowerCase() === base) || null;
+                        };
+                        const resolve = (raw, apply) => {
+                            const isResolved = raw && (raw.startsWith('blob:') || raw.startsWith('data:'));
+                            if (isResolved) return;
+                            const entry = findEntry(raw);
+                            if (!entry) return;
+                            // createUrl/getBlob strip the leading char (expects a leading slash).
+                            book.archive.createUrl('/' + entry, { base64: false })
+                                .then(url => apply(url))
+                                .catch(() => { });
+                        };
+
+                        doc.querySelectorAll('img').forEach((img) => {
+                            const cur = img.getAttribute('src') || '';
+                            resolve(cur, (url) => { img.setAttribute('src', url); });
+                            img.addEventListener('error', () => resolve(img.getAttribute('src') || cur, (url) => { img.setAttribute('src', url); }), { once: true });
+                        });
+                        // SVG-wrapped images use (xlink:)href
+                        doc.querySelectorAll('image').forEach((im) => {
+                            const cur = im.getAttribute('href') || im.getAttributeNS(XLINK, 'href') || '';
+                            resolve(cur, (url) => { im.setAttribute('href', url); im.setAttributeNS(XLINK, 'href', url); });
+                        });
+                    }
+                } catch (_) { /* ignore */ }
+
                 // Inject Google Fonts link
                 const fontLink = doc.createElement('link');
                 fontLink.rel = 'stylesheet';
