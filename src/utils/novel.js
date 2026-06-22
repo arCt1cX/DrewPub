@@ -5,27 +5,35 @@
 // each network hop is a single Cloudflare Function subrequest (the functions
 // can't loop over thousands of chapters within one invocation).
 //
-// Imports are resumable: every chapter is persisted to the novelChapters store
-// as soon as it arrives, the book record is created from whatever was fetched,
-// and "Check for new chapters" (syncNovel) backfills the rest on later runs.
-// This is how rate limiting (HTTP 429) is handled gracefully — we save the
-// partial novel and let the user resume once the limit resets.
+// Rate limiting (novelight 429s the Cloudflare egress IP when hit hard):
+//   - The chapter LIST is cached on the book, so resume/sync never re-walk all
+//     ~60 pages — that burst was what heated the IP before the text phase.
+//   - Text fetches run one-at-a-time with an ADAPTIVE gap: it widens on 429 and
+//     slowly narrows on success, self-tuning to the source's tolerance.
+//   - On a sustained block we stop cleanly and keep what we have; "Check for new
+//     chapters" resumes the rest. Imports are fully resumable.
 
 import JSZip from 'jszip';
 import { generateId } from './epub';
 import { saveNovelChapter, getNovelChapters } from '../db';
 
-const CHAPTER_CONCURRENCY = 3;
-const LIST_PAGE_DELAY = 350;   // ms between chapter-list pages (be gentle)
-const MAX_LIST_PAGES = 500;    // safety cap (~25k chapters)
-const MAX_RETRIES = 4;         // per request, on rate-limit / transient errors
+const MAX_LIST_PAGES = 500;        // safety cap (~25k chapters)
+const LIST_PAGE_GAP = 500;         // ms between chapter-list pages
+const POST_LIST_COOLDOWN = 5000;   // ms to let the IP cool before the text phase
+
+// Adaptive pacing for the text phase
+const GAP_START = 600;             // ms between chapter requests
+const GAP_MIN = 400;
+const GAP_MAX = 6000;
+const GAP_STEP_UP = 700;           // widen on rate limit
+const GAP_STEP_DOWN = 80;          // narrow on success
+const MAX_CONSECUTIVE_BLOCKS = 6;  // give up the run after this many in a row
 
 // ─── Public API ─────────────────────────────────────
 
 /**
- * Import a web novel into the library. Resumable: returns whatever was fetched.
- * @returns {Promise<object>} a book record ready for addBook(). `complete` is
- *          false if rate limiting cut the run short — resume later via syncNovel.
+ * Import a web novel into the library. Resumable — returns whatever was fetched.
+ * `complete` is false if rate limiting cut the run short; resume via syncNovel.
  */
 export async function importNovel(url, { onProgress } = {}) {
     const report = onProgress || (() => {});
@@ -34,69 +42,71 @@ export async function importNovel(url, { onProgress } = {}) {
     const meta = await fetchMeta(url);
 
     report('Listing chapters…');
-    const list = await fetchChapterList(meta.sourceBookId, report);
+    const list = await fetchFullList(meta.sourceBookId, report);
     if (list.length === 0) throw new Error('No chapters found for this novel');
 
     const bookId = generateId();
 
+    report('Pausing before download…');
+    await sleep(POST_LIST_COOLDOWN);
+
     report(`Downloading chapters (0/${list.length})…`);
-    const { aborted } = await fetchChapterTexts(list, bookId, (done) =>
+    const { aborted } = await fetchTexts(list, bookId, (done) =>
         report(`Downloading chapters (${done}/${list.length})…`)
     );
 
     report('Building EPUB…');
     const stored = await getNovelChapters(bookId);
-    const data = await buildEpub(meta, stored.map(c => ({ title: c.title, html: c.html })));
-    const complete = !aborted && stored.length >= list.length;
+    const data = await buildEpub(meta, epubChapters(stored));
 
-    return {
+    return makeBookRecord({
         id: bookId,
-        title: meta.title,
-        author: meta.author,
-        cover: meta.cover,
-        fileName: `${slug(meta.title)}.epub`,
-        fileSize: data.byteLength,
+        meta,
+        list,
+        fetched: stored.length,
+        aborted,
         data,
-        addedAt: Date.now(),
-        lastReadAt: Date.now(),
-        progress: 0,
-        // web-novel sync metadata
-        sourceType: 'webnovel',
-        sourceUrl: meta.sourceUrl,
-        sourceBookId: meta.sourceBookId,
-        chapterCount: list.length,
-        fetchedCount: stored.length,
-        complete,
-        lastSyncAt: Date.now(),
-    };
+        base: { addedAt: Date.now(), progress: 0 },
+    });
 }
 
 /**
- * Check a web-novel book for new (or not-yet-fetched) chapters; download &
- * merge them and rebuild the EPUB. Doubles as "resume a partial import".
+ * Check a web-novel book for new chapters AND backfill any not-yet-downloaded
+ * ones (i.e. resume a partial import), then rebuild the EPUB.
  * @returns {Promise<{book: object|null, added: number, complete: boolean}>}
- *          book is null only when nothing changed.
  */
 export async function syncNovel(book, { onProgress } = {}) {
     const report = onProgress || (() => {});
     if (book.sourceType !== 'webnovel') throw new Error('Not a web novel');
 
-    report('Checking for chapters…');
-    const meta = await fetchMeta(book.sourceUrl);
-    const list = await fetchChapterList(meta.sourceBookId, report);
+    // Reuse the cached chapter list; only scan the newest pages for additions.
+    let list = Array.isArray(book.chapterList) ? book.chapterList.slice() : [];
+    if (list.length === 0) {
+        report('Listing chapters…');
+        list = await fetchFullList(book.sourceBookId, report);
+    } else {
+        report('Checking for new chapters…');
+        const known = new Set(list.map(c => c.id));
+        const fresh = await fetchNewChapters(book.sourceBookId, known, report);
+        if (fresh.length) {
+            list = [...list, ...fresh];
+            list.sort((a, b) => (a.num ?? 0) - (b.num ?? 0));
+        }
+    }
 
     const existing = await getNovelChapters(book.id);
     const before = existing.length;
-    const haveIds = new Set(existing.map(c => c.chapterId));
-    const missing = list.filter(c => !haveIds.has(c.id));
+    const have = new Set(existing.map(c => c.chapterId));
+    const missing = list.filter(c => !have.has(c.id));
 
     if (missing.length === 0) {
         report('Already up to date');
-        return { book: null, added: 0, complete: true };
+        // Persist the (possibly newly built) list even when nothing to download.
+        return { book: { ...book, chapterList: list, chapterCount: list.length }, added: 0, complete: true };
     }
 
     report(`Downloading chapters (0/${missing.length})…`);
-    const { aborted } = await fetchChapterTexts(missing, book.id, (done) =>
+    const { aborted } = await fetchTexts(missing, book.id, (done) =>
         report(`Downloading chapters (${done}/${missing.length})…`)
     );
 
@@ -104,162 +114,174 @@ export async function syncNovel(book, { onProgress } = {}) {
     const all = await getNovelChapters(book.id);
     const data = await buildEpub(
         { title: book.title, author: book.author, cover: book.cover },
-        all.map(c => ({ title: c.title, html: c.html }))
+        epubChapters(all)
     );
 
     const added = all.length - before;
-    const complete = !aborted && all.length >= list.length;
-
-    const updated = {
-        ...book,
+    const updated = makeBookRecord({
+        id: book.id,
+        meta: { title: book.title, author: book.author, cover: book.cover, sourceUrl: book.sourceUrl, sourceBookId: book.sourceBookId },
+        list,
+        fetched: all.length,
+        aborted,
         data,
+        base: book,
+    });
+
+    report(updated.complete ? `Added ${added} chapter${added !== 1 ? 's' : ''}` : `Added ${added} (more remain)`);
+    return { book: updated, added, complete: updated.complete };
+}
+
+function makeBookRecord({ id, meta, list, fetched, aborted, data, base }) {
+    return {
+        ...base,
+        id,
+        title: meta.title,
+        author: meta.author,
+        cover: meta.cover || base.cover || '',
+        fileName: `${slug(meta.title)}.epub`,
         fileSize: data.byteLength,
+        data,
+        lastReadAt: base.lastReadAt || Date.now(),
+        sourceType: 'webnovel',
+        sourceUrl: meta.sourceUrl,
+        sourceBookId: meta.sourceBookId,
+        chapterList: list,                       // cached id/num/title — avoids re-listing
         chapterCount: list.length,
-        fetchedCount: all.length,
-        complete,
-        cover: book.cover || meta.cover,
+        fetchedCount: fetched,
+        complete: !aborted && fetched >= list.length,
         lastSyncAt: Date.now(),
     };
-
-    report(complete ? `Added ${added} chapter${added !== 1 ? 's' : ''}` : `Added ${added} (more remain)`);
-    return { book: updated, added, complete };
 }
 
-// ─── Networking (with rate-limit backoff) ───────────
+// Reader needs at least one chapter; show guidance if the run got nothing yet.
+function epubChapters(stored) {
+    if (stored.length === 0) {
+        return [{ title: 'Download pending', html: '<p>Chapters not downloaded yet. Open the ⋯ menu and tap “Check for new chapters” to download.</p>' }];
+    }
+    return stored.map(c => ({ title: c.title, html: c.html }));
+}
+
+// ─── Networking ─────────────────────────────────────
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const jitter = (ms) => ms + Math.floor(Math.random() * 500);
 
-// Thrown when a request keeps getting rate-limited; signals "stop & resume later".
-class RateLimitError extends Error {}
-
-function backoff(attempt) {
-    return Math.min(1000 * 2 ** attempt, 15000) + Math.floor(Math.random() * 500);
-}
-
-// GET a JSON API route, retrying transient/rate-limit failures with backoff.
-// Throws RateLimitError if still rate-limited after MAX_RETRIES.
 async function apiGet(path) {
-    let lastErr;
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-        let res;
-        try {
-            res = await fetch(path);
-        } catch (e) {
-            // Network blip — retry a couple of times, then give up.
-            lastErr = e;
-            if (attempt >= 2) throw e;
-            await sleep(backoff(attempt));
-            continue;
-        }
-
-        if (res.status === 429 || res.status === 503 || res.status === 502) {
-            lastErr = new RateLimitError(`HTTP ${res.status}`);
-            if (attempt >= MAX_RETRIES) throw lastErr;
-            const ra = parseInt(res.headers.get('Retry-After'), 10);
-            await sleep(Number.isFinite(ra) && ra > 0 ? ra * 1000 : backoff(attempt));
-            continue;
-        }
-
-        const data = await res.json().catch(() => null);
-        if (data && data.error) {
-            // status carried in body for upstream rate limits (shouldn't reach here)
-            if (data.status === 429 || data.status === 503) throw new RateLimitError(data.error);
-            const err = new Error(data.error);
-            err.permanent = true; // 4xx-style content error, not worth retrying
-            throw err;
-        }
-        return data;
-    }
-    throw lastErr;
+    const res = await fetch(path);
+    const data = await res.json().catch(() => null);
+    return { status: res.status, ok: res.ok, data };
 }
 
 async function fetchMeta(url) {
-    return apiGet(`/api/novel-meta?url=${encodeURIComponent(url)}`);
+    const { data } = await apiGet(`/api/novel-meta?url=${encodeURIComponent(url)}`);
+    if (!data || data.error) throw new Error(data?.error || 'Could not read novel info');
+    return data;
 }
 
-// Walk the paginated chapter list (newest-first) until no new ids appear,
-// then return all chapters in ascending reading order.
-async function fetchChapterList(sourceBookId, report) {
+async function listPage(sourceBookId, page) {
+    const { data, status } = await apiGet(`/api/novel-list?bookId=${sourceBookId}&page=${page}`);
+    if (status === 429 || status === 503 || status >= 500) {
+        // Listing rarely trips this; a short wait usually clears it.
+        await sleep(jitter(4000));
+        const retry = await apiGet(`/api/novel-list?bookId=${sourceBookId}&page=${page}`);
+        if (!retry.data || retry.data.error) throw new Error(retry.data?.error || `Chapter list error ${retry.status}`);
+        return retry.data.chapters || [];
+    }
+    if (!data || data.error) throw new Error(data?.error || `Chapter list error ${status}`);
+    return data.chapters || [];
+}
+
+// Walk every page (newest-first) until no new ids appear; return ascending order.
+async function fetchFullList(sourceBookId, report) {
     const seen = new Set();
     const collected = [];
-
     for (let page = 1; page <= MAX_LIST_PAGES; page++) {
-        const data = await apiGet(`/api/novel-list?bookId=${sourceBookId}&page=${page}`);
-        const chapters = data.chapters || [];
+        const chapters = await listPage(sourceBookId, page);
         if (chapters.length === 0) break;
-
-        let newOnPage = 0;
+        let added = 0;
         for (const ch of chapters) {
             if (seen.has(ch.id)) continue;
             seen.add(ch.id);
             collected.push(ch);
-            newOnPage++;
+            added++;
         }
         report?.(`Listing chapters (${collected.length} found)…`);
-
-        // Out-of-range pages clamp to the last page and repeat it → stop.
-        if (newOnPage === 0) break;
-        await sleep(LIST_PAGE_DELAY);
+        if (added === 0) break; // out-of-range pages clamp & repeat the last page
+        await sleep(LIST_PAGE_GAP);
     }
-
-    // Ascending order: prefer chapter number, fall back to source order reversed.
     if (collected.every(c => c.num == null)) collected.reverse();
     else collected.sort((a, b) => (a.num ?? 0) - (b.num ?? 0));
-
     return collected;
 }
 
-// Download chapter texts with a small concurrency pool, persisting each to the
-// novelChapters store as it arrives. Stops early (aborted=true) when rate
-// limiting can't be ridden out, leaving the rest for a later resume/sync.
-async function fetchChapterTexts(list, bookId, onCount) {
-    let done = 0;
-    let cursor = 0;
-    let aborted = false;
+// Scan newest pages only, stopping once a page contains an already-known id.
+async function fetchNewChapters(sourceBookId, knownIds, report) {
+    const found = [];
+    for (let page = 1; page <= MAX_LIST_PAGES; page++) {
+        const chapters = await listPage(sourceBookId, page);
+        if (chapters.length === 0) break;
+        const novel = chapters.filter(c => !knownIds.has(c.id));
+        found.push(...novel);
+        report?.(`Checking for new chapters (${found.length})…`);
+        if (novel.length < chapters.length) break; // reached known territory
+        await sleep(LIST_PAGE_GAP);
+    }
+    return found;
+}
 
-    async function worker() {
-        while (cursor < list.length && !aborted) {
-            const ch = list[cursor++];
+// One-at-a-time text download with an adaptive inter-request gap. Persists each
+// chapter as it arrives; stops (aborted) on a sustained block, keeping progress.
+async function fetchTexts(targets, bookId, onCount) {
+    let gap = GAP_START;
+    let consecutiveBlocks = 0;
+    let done = 0;
+
+    for (const ch of targets) {
+        let settled = false;
+        while (!settled) {
+            await sleep(gap);
+            let result;
             try {
-                const data = await apiGet(`/api/novel-chapter?id=${ch.id}`);
-                await saveNovelChapter(bookId, {
-                    chapterId: ch.id,
-                    num: ch.num,
-                    title: ch.title,
-                    html: data.content || '<p>(empty chapter)</p>',
-                });
-            } catch (err) {
-                if (err instanceof RateLimitError) {
-                    // Persistent rate limit → stop everyone, keep what we have.
-                    aborted = true;
-                    return;
-                }
-                if (err.permanent) {
-                    // Locked/missing chapter → store a placeholder so we don't
-                    // retry it forever, and keep going.
-                    await saveNovelChapter(bookId, {
-                        chapterId: ch.id,
-                        num: ch.num,
-                        title: ch.title,
-                        html: `<p>[Chapter unavailable: ${escapeXml(err.message)}]</p>`,
-                    });
-                } else {
-                    // Unknown error → stop to be safe; resume later.
-                    aborted = true;
-                    return;
-                }
+                result = await apiGet(`/api/novel-chapter?id=${ch.id}`);
+            } catch {
+                result = { status: 0, ok: false, data: null };
             }
+            const { status, ok, data } = result;
+
+            if (ok && data && typeof data.content === 'string') {
+                await saveNovelChapter(bookId, { chapterId: ch.id, num: ch.num, title: ch.title, html: data.content });
+                consecutiveBlocks = 0;
+                gap = Math.max(GAP_MIN, gap - GAP_STEP_DOWN); // speed back up on success
+                settled = true;
+                done++;
+                onCount?.(done);
+                continue;
+            }
+
+            const rateLimited = status === 429 || status === 503 || status === 0 || status >= 500 || status === 502;
+            if (rateLimited) {
+                consecutiveBlocks++;
+                if (consecutiveBlocks >= MAX_CONSECUTIVE_BLOCKS) {
+                    return { aborted: true, done };
+                }
+                gap = Math.min(GAP_MAX, gap + GAP_STEP_UP); // back off
+                await sleep(jitter(Math.min(5000 * consecutiveBlocks, 30000)));
+                continue; // retry same chapter
+            }
+
+            // Permanent (4xx / locked / empty): record a placeholder and move on.
+            await saveNovelChapter(bookId, {
+                chapterId: ch.id, num: ch.num, title: ch.title,
+                html: `<p>[Chapter unavailable]</p>`,
+            });
+            consecutiveBlocks = 0;
+            settled = true;
             done++;
             onCount?.(done);
         }
     }
-
-    const pool = Array.from(
-        { length: Math.min(CHAPTER_CONCURRENCY, list.length) },
-        worker
-    );
-    await Promise.all(pool);
-    return { aborted };
+    return { aborted: false, done };
 }
 
 // ─── EPUB assembly ──────────────────────────────────
@@ -284,7 +306,6 @@ async function buildEpub(meta, chapters) {
 
     const oebps = zip.folder('OEBPS');
 
-    // Chapter documents
     const items = [];
     const navPoints = [];
     const spine = [];
@@ -309,7 +330,6 @@ ${ch.html || '<p></p>'}
         );
     });
 
-    // EPUB3 navigation document
     oebps.file('nav.xhtml',
         `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
@@ -322,7 +342,6 @@ ${chapters.map((ch, idx) => `<li><a href="chap${idx + 1}.xhtml">${escapeXml(ch.t
 </body>
 </html>`);
 
-    // EPUB2 NCX (fallback for readers/epub.js paths that prefer it)
     oebps.file('toc.ncx',
         `<?xml version="1.0" encoding="UTF-8"?>
 <ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
@@ -338,7 +357,6 @@ ${navPoints.join('\n')}
 </navMap>
 </ncx>`);
 
-    // Package document
     oebps.file('content.opf',
         `<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid">

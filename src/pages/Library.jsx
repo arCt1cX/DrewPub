@@ -74,12 +74,12 @@ export default function Library() {
             if (updated) {
                 await addBook(updated);
                 await loadBooks();
-                setNovelBusy(complete
-                    ? `✓ Added ${added} chapter${added !== 1 ? 's' : ''}`
-                    : `✓ Added ${added} — still rate limited, run again to continue`);
-            } else {
-                setNovelBusy('✓ Already up to date');
             }
+            setNovelBusy(
+                added === 0 ? '✓ Already up to date'
+                    : complete ? `✓ Added ${added} chapter${added !== 1 ? 's' : ''}`
+                        : `✓ Added ${added} — still rate limited, run again to continue`
+            );
         } catch (err) {
             console.error('Novel sync failed:', err);
             setNovelBusy(`✗ ${err.message}`);

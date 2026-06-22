@@ -50,9 +50,10 @@ function parseChapters(html) {
     return chapters;
 }
 
-// Forward rate-limit / unavailable status (and Retry-After) so the client can back off.
+// Forward the real upstream status (and Retry-After) so the client can decide:
+// 429/5xx → back off & retry, 4xx → permanent skip.
 function upstreamError(res, label) {
-    const status = (res.status === 429 || res.status === 503) ? res.status : 502;
+    const status = res.status || 502;
     const retryAfter = res.headers.get('retry-after') || '';
     const headers = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
     if (retryAfter) headers['Retry-After'] = retryAfter;

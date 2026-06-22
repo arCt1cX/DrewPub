@@ -77,7 +77,7 @@ function esc(t) {
 }
 
 function upstreamError(res, label) {
-    const status = (res.status === 429 || res.status === 503) ? res.status : 502;
+    const status = res.status || 502;
     const retryAfter = res.headers.get('retry-after') || '';
     const headers = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
     if (retryAfter) headers['Retry-After'] = retryAfter;
