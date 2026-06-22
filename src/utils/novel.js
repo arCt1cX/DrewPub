@@ -4,19 +4,28 @@
 // Currently supports novelight.net. The flow is orchestrated client-side so
 // each network hop is a single Cloudflare Function subrequest (the functions
 // can't loop over thousands of chapters within one invocation).
+//
+// Imports are resumable: every chapter is persisted to the novelChapters store
+// as soon as it arrives, the book record is created from whatever was fetched,
+// and "Check for new chapters" (syncNovel) backfills the rest on later runs.
+// This is how rate limiting (HTTP 429) is handled gracefully — we save the
+// partial novel and let the user resume once the limit resets.
 
 import JSZip from 'jszip';
 import { generateId } from './epub';
 import { saveNovelChapter, getNovelChapters } from '../db';
 
-const CHAPTER_CONCURRENCY = 4;
-const MAX_LIST_PAGES = 500; // safety cap (~25k chapters)
+const CHAPTER_CONCURRENCY = 3;
+const LIST_PAGE_DELAY = 350;   // ms between chapter-list pages (be gentle)
+const MAX_LIST_PAGES = 500;    // safety cap (~25k chapters)
+const MAX_RETRIES = 4;         // per request, on rate-limit / transient errors
 
 // ─── Public API ─────────────────────────────────────
 
 /**
- * Import a brand-new web novel into the library.
- * @returns {Promise<object>} a book record ready for addBook()
+ * Import a web novel into the library. Resumable: returns whatever was fetched.
+ * @returns {Promise<object>} a book record ready for addBook(). `complete` is
+ *          false if rate limiting cut the run short — resume later via syncNovel.
  */
 export async function importNovel(url, { onProgress } = {}) {
     const report = onProgress || (() => {});
@@ -31,12 +40,14 @@ export async function importNovel(url, { onProgress } = {}) {
     const bookId = generateId();
 
     report(`Downloading chapters (0/${list.length})…`);
-    const chapters = await fetchChapterTexts(list, bookId, (done) =>
+    const { aborted } = await fetchChapterTexts(list, bookId, (done) =>
         report(`Downloading chapters (${done}/${list.length})…`)
     );
 
     report('Building EPUB…');
-    const data = await buildEpub(meta, chapters);
+    const stored = await getNovelChapters(bookId);
+    const data = await buildEpub(meta, stored.map(c => ({ title: c.title, html: c.html })));
+    const complete = !aborted && stored.length >= list.length;
 
     return {
         id: bookId,
@@ -54,63 +65,116 @@ export async function importNovel(url, { onProgress } = {}) {
         sourceUrl: meta.sourceUrl,
         sourceBookId: meta.sourceBookId,
         chapterCount: list.length,
+        fetchedCount: stored.length,
+        complete,
         lastSyncAt: Date.now(),
     };
 }
 
 /**
- * Check a web-novel book for new chapters; download & merge them, rebuild EPUB.
- * @returns {Promise<{book: object|null, added: number}>} book is null if nothing new.
+ * Check a web-novel book for new (or not-yet-fetched) chapters; download &
+ * merge them and rebuild the EPUB. Doubles as "resume a partial import".
+ * @returns {Promise<{book: object|null, added: number, complete: boolean}>}
+ *          book is null only when nothing changed.
  */
 export async function syncNovel(book, { onProgress } = {}) {
     const report = onProgress || (() => {});
     if (book.sourceType !== 'webnovel') throw new Error('Not a web novel');
 
-    report('Checking for new chapters…');
+    report('Checking for chapters…');
     const meta = await fetchMeta(book.sourceUrl);
     const list = await fetchChapterList(meta.sourceBookId, report);
 
     const existing = await getNovelChapters(book.id);
+    const before = existing.length;
     const haveIds = new Set(existing.map(c => c.chapterId));
-    const fresh = list.filter(c => !haveIds.has(c.id));
+    const missing = list.filter(c => !haveIds.has(c.id));
 
-    if (fresh.length === 0) {
+    if (missing.length === 0) {
         report('Already up to date');
-        return { book: null, added: 0 };
+        return { book: null, added: 0, complete: true };
     }
 
-    report(`Downloading new chapters (0/${fresh.length})…`);
-    await fetchChapterTexts(fresh, book.id, (done) =>
-        report(`Downloading new chapters (${done}/${fresh.length})…`)
+    report(`Downloading chapters (0/${missing.length})…`);
+    const { aborted } = await fetchChapterTexts(missing, book.id, (done) =>
+        report(`Downloading chapters (${done}/${missing.length})…`)
     );
 
     report('Rebuilding EPUB…');
-    const all = await getNovelChapters(book.id); // includes the freshly saved ones
+    const all = await getNovelChapters(book.id);
     const data = await buildEpub(
         { title: book.title, author: book.author, cover: book.cover },
         all.map(c => ({ title: c.title, html: c.html }))
     );
 
+    const added = all.length - before;
+    const complete = !aborted && all.length >= list.length;
+
     const updated = {
         ...book,
         data,
         fileSize: data.byteLength,
-        chapterCount: all.length,
+        chapterCount: list.length,
+        fetchedCount: all.length,
+        complete,
         cover: book.cover || meta.cover,
         lastSyncAt: Date.now(),
     };
 
-    report(`Added ${fresh.length} new chapter${fresh.length > 1 ? 's' : ''}`);
-    return { book: updated, added: fresh.length };
+    report(complete ? `Added ${added} chapter${added !== 1 ? 's' : ''}` : `Added ${added} (more remain)`);
+    return { book: updated, added, complete };
 }
 
-// ─── Fetch helpers ──────────────────────────────────
+// ─── Networking (with rate-limit backoff) ───────────
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// Thrown when a request keeps getting rate-limited; signals "stop & resume later".
+class RateLimitError extends Error {}
+
+function backoff(attempt) {
+    return Math.min(1000 * 2 ** attempt, 15000) + Math.floor(Math.random() * 500);
+}
+
+// GET a JSON API route, retrying transient/rate-limit failures with backoff.
+// Throws RateLimitError if still rate-limited after MAX_RETRIES.
+async function apiGet(path) {
+    let lastErr;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        let res;
+        try {
+            res = await fetch(path);
+        } catch (e) {
+            // Network blip — retry a couple of times, then give up.
+            lastErr = e;
+            if (attempt >= 2) throw e;
+            await sleep(backoff(attempt));
+            continue;
+        }
+
+        if (res.status === 429 || res.status === 503 || res.status === 502) {
+            lastErr = new RateLimitError(`HTTP ${res.status}`);
+            if (attempt >= MAX_RETRIES) throw lastErr;
+            const ra = parseInt(res.headers.get('Retry-After'), 10);
+            await sleep(Number.isFinite(ra) && ra > 0 ? ra * 1000 : backoff(attempt));
+            continue;
+        }
+
+        const data = await res.json().catch(() => null);
+        if (data && data.error) {
+            // status carried in body for upstream rate limits (shouldn't reach here)
+            if (data.status === 429 || data.status === 503) throw new RateLimitError(data.error);
+            const err = new Error(data.error);
+            err.permanent = true; // 4xx-style content error, not worth retrying
+            throw err;
+        }
+        return data;
+    }
+    throw lastErr;
+}
 
 async function fetchMeta(url) {
-    const res = await fetch(`/api/novel-meta?url=${encodeURIComponent(url)}`);
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
-    return data;
+    return apiGet(`/api/novel-meta?url=${encodeURIComponent(url)}`);
 }
 
 // Walk the paginated chapter list (newest-first) until no new ids appear,
@@ -120,10 +184,7 @@ async function fetchChapterList(sourceBookId, report) {
     const collected = [];
 
     for (let page = 1; page <= MAX_LIST_PAGES; page++) {
-        const res = await fetch(`/api/novel-list?bookId=${sourceBookId}&page=${page}`);
-        const data = await res.json();
-        if (data.error) throw new Error(data.error);
-
+        const data = await apiGet(`/api/novel-list?bookId=${sourceBookId}&page=${page}`);
         const chapters = data.chapters || [];
         if (chapters.length === 0) break;
 
@@ -138,37 +199,56 @@ async function fetchChapterList(sourceBookId, report) {
 
         // Out-of-range pages clamp to the last page and repeat it → stop.
         if (newOnPage === 0) break;
+        await sleep(LIST_PAGE_DELAY);
     }
 
     // Ascending order: prefer chapter number, fall back to source order reversed.
-    collected.sort((a, b) => {
-        if (a.num != null && b.num != null) return a.num - b.num;
-        return 0;
-    });
     if (collected.every(c => c.num == null)) collected.reverse();
+    else collected.sort((a, b) => (a.num ?? 0) - (b.num ?? 0));
 
     return collected;
 }
 
 // Download chapter texts with a small concurrency pool, persisting each to the
-// novelChapters store as it arrives. Returns chapters in input (ascending) order.
+// novelChapters store as it arrives. Stops early (aborted=true) when rate
+// limiting can't be ridden out, leaving the rest for a later resume/sync.
 async function fetchChapterTexts(list, bookId, onCount) {
-    const results = new Array(list.length);
     let done = 0;
     let cursor = 0;
+    let aborted = false;
 
     async function worker() {
-        while (cursor < list.length) {
-            const i = cursor++;
-            const ch = list[i];
-            const html = await fetchChapterText(ch.id);
-            await saveNovelChapter(bookId, {
-                chapterId: ch.id,
-                num: ch.num,
-                title: ch.title,
-                html,
-            });
-            results[i] = { title: ch.title, html };
+        while (cursor < list.length && !aborted) {
+            const ch = list[cursor++];
+            try {
+                const data = await apiGet(`/api/novel-chapter?id=${ch.id}`);
+                await saveNovelChapter(bookId, {
+                    chapterId: ch.id,
+                    num: ch.num,
+                    title: ch.title,
+                    html: data.content || '<p>(empty chapter)</p>',
+                });
+            } catch (err) {
+                if (err instanceof RateLimitError) {
+                    // Persistent rate limit → stop everyone, keep what we have.
+                    aborted = true;
+                    return;
+                }
+                if (err.permanent) {
+                    // Locked/missing chapter → store a placeholder so we don't
+                    // retry it forever, and keep going.
+                    await saveNovelChapter(bookId, {
+                        chapterId: ch.id,
+                        num: ch.num,
+                        title: ch.title,
+                        html: `<p>[Chapter unavailable: ${escapeXml(err.message)}]</p>`,
+                    });
+                } else {
+                    // Unknown error → stop to be safe; resume later.
+                    aborted = true;
+                    return;
+                }
+            }
             done++;
             onCount?.(done);
         }
@@ -179,23 +259,7 @@ async function fetchChapterTexts(list, bookId, onCount) {
         worker
     );
     await Promise.all(pool);
-    return results;
-}
-
-async function fetchChapterText(id, attempt = 0) {
-    try {
-        const res = await fetch(`/api/novel-chapter?id=${id}`);
-        const data = await res.json();
-        if (data.error) throw new Error(data.error);
-        return data.content || '<p>(empty chapter)</p>';
-    } catch (err) {
-        if (attempt < 2) {
-            await new Promise(r => setTimeout(r, 400 * (attempt + 1)));
-            return fetchChapterText(id, attempt + 1);
-        }
-        // Don't abort the whole import for one bad chapter.
-        return `<p>[Chapter unavailable: ${escapeXml(err.message)}]</p>`;
-    }
+    return { aborted };
 }
 
 // ─── EPUB assembly ──────────────────────────────────

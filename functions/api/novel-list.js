@@ -21,7 +21,7 @@ export async function onRequestGet(context) {
                 'Referer': 'https://novelight.net/',
             },
         });
-        if (!res.ok) return json({ error: `Chapter list returned ${res.status}` }, 502);
+        if (!res.ok) return upstreamError(res, 'Chapter list');
 
         const data = await res.json().catch(() => null);
         const listHtml = data && typeof data.html === 'string' ? data.html : '';
@@ -48,6 +48,18 @@ function parseChapters(html) {
         chapters.push({ id, num, title, date });
     }
     return chapters;
+}
+
+// Forward rate-limit / unavailable status (and Retry-After) so the client can back off.
+function upstreamError(res, label) {
+    const status = (res.status === 429 || res.status === 503) ? res.status : 502;
+    const retryAfter = res.headers.get('retry-after') || '';
+    const headers = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
+    if (retryAfter) headers['Retry-After'] = retryAfter;
+    return new Response(
+        JSON.stringify({ error: `${label} returned ${res.status}`, status: res.status, retryAfter }),
+        { status, headers }
+    );
 }
 
 function json(obj, status = 200) {

@@ -24,7 +24,7 @@ export async function onRequestGet(context) {
         const res = await fetch(bookUrl, {
             headers: { 'User-Agent': UA, 'Accept': 'text/html' },
         });
-        if (!res.ok) return json({ error: `Book page returned ${res.status}` }, 502);
+        if (!res.ok) return upstreamError(res, 'Book page');
 
         const html = await res.text();
 
@@ -73,6 +73,17 @@ function matchTag(html, re) {
 
 function escapeRe(s) {
     return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function upstreamError(res, label) {
+    const status = (res.status === 429 || res.status === 503) ? res.status : 502;
+    const retryAfter = res.headers.get('retry-after') || '';
+    const headers = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
+    if (retryAfter) headers['Retry-After'] = retryAfter;
+    return new Response(
+        JSON.stringify({ error: `${label} returned ${res.status}`, status: res.status, retryAfter }),
+        { status, headers }
+    );
 }
 
 function json(obj, status = 200) {

@@ -55,12 +55,14 @@ export default function Library() {
             await addBook(book);
             await loadBooks();
             clearSearch();
-            setNovelBusy('✓ Added to library!');
+            setNovelBusy(book.complete
+                ? `✓ Added ${book.fetchedCount} chapters!`
+                : `✓ Added ${book.fetchedCount}/${book.chapterCount} — rate limited. Tap ⋯ → Check for new chapters to resume.`);
         } catch (err) {
             console.error('Novel import failed:', err);
             setNovelBusy(`✗ ${err.message}`);
         } finally {
-            setTimeout(() => setNovelBusy(''), 3000);
+            setTimeout(() => setNovelBusy(''), 6000);
         }
     };
 
@@ -68,11 +70,13 @@ export default function Library() {
         if (novelBusy) return;
         setNovelBusy('Checking for new chapters…');
         try {
-            const { book: updated, added } = await syncNovel(book, { onProgress: setNovelBusy });
+            const { book: updated, added, complete } = await syncNovel(book, { onProgress: setNovelBusy });
             if (updated) {
                 await addBook(updated);
                 await loadBooks();
-                setNovelBusy(`✓ Added ${added} new chapter${added > 1 ? 's' : ''}`);
+                setNovelBusy(complete
+                    ? `✓ Added ${added} chapter${added !== 1 ? 's' : ''}`
+                    : `✓ Added ${added} — still rate limited, run again to continue`);
             } else {
                 setNovelBusy('✓ Already up to date');
             }
@@ -80,7 +84,7 @@ export default function Library() {
             console.error('Novel sync failed:', err);
             setNovelBusy(`✗ ${err.message}`);
         } finally {
-            setTimeout(() => setNovelBusy(''), 3000);
+            setTimeout(() => setNovelBusy(''), 5000);
         }
     };
 

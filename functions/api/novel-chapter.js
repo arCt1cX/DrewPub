@@ -19,7 +19,7 @@ export async function onRequestGet(context) {
                 'Referer': `https://novelight.net/book/chapter/${id}`,
             },
         });
-        if (!res.ok) return json({ error: `Chapter returned ${res.status}` }, 502);
+        if (!res.ok) return upstreamError(res, 'Chapter');
 
         const data = await res.json().catch(() => null);
         const raw = data && typeof data.content === 'string' ? data.content : '';
@@ -74,6 +74,17 @@ function esc(t) {
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;');
+}
+
+function upstreamError(res, label) {
+    const status = (res.status === 429 || res.status === 503) ? res.status : 502;
+    const retryAfter = res.headers.get('retry-after') || '';
+    const headers = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
+    if (retryAfter) headers['Retry-After'] = retryAfter;
+    return new Response(
+        JSON.stringify({ error: `${label} returned ${res.status}`, status: res.status, retryAfter }),
+        { status, headers }
+    );
 }
 
 function json(obj, status = 200) {
