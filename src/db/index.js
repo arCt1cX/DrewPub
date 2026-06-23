@@ -1,14 +1,14 @@
 import { openDB } from 'idb';
 
 const DB_NAME = 'drewpub-db';
-const DB_VERSION = 4;
+const DB_VERSION = 5;
 
 let dbPromise;
 
 function getDB() {
     if (!dbPromise) {
         dbPromise = openDB(DB_NAME, DB_VERSION, {
-            upgrade(db, oldVersion) {
+            async upgrade(db, oldVersion, newVersion, tx) {
                 if (!db.objectStoreNames.contains('books')) {
                     const bookStore = db.createObjectStore('books', { keyPath: 'id' });
                     bookStore.createIndex('title', 'title');
@@ -42,6 +42,28 @@ function getDB() {
                     const ncStore = db.createObjectStore('novelChapters', { keyPath: 'id' });
                     ncStore.createIndex('bookId', 'bookId');
                 }
+                // v5: Move the heavy EPUB bytes into their own store. The books
+                // store keeps only metadata, so listing the library and saving
+                // reading progress no longer load/rewrite multi-MB ArrayBuffers
+                // (which exhausted memory on mobile once several big books existed).
+                if (!db.objectStoreNames.contains('bookData')) {
+                    db.createObjectStore('bookData', { keyPath: 'id' });
+                }
+                if (oldVersion > 0 && oldVersion < 5) {
+                    const books = tx.objectStore('books');
+                    const dataStore = tx.objectStore('bookData');
+                    // One record at a time (cursor) so we never hold every EPUB at once.
+                    let cursor = await books.openCursor();
+                    while (cursor) {
+                        const b = cursor.value;
+                        if (b && b.data !== undefined) {
+                            await dataStore.put({ id: b.id, data: b.data });
+                            const { data, ...meta } = b;
+                            await cursor.update(meta);
+                        }
+                        cursor = await cursor.continue();
+                    }
+                }
             }
         });
     }
@@ -52,14 +74,27 @@ function getDB() {
 
 export async function addBook(book) {
     const db = await getDB();
-    return db.put('books', book);
+    const { data, ...meta } = book;
+    const tx = db.transaction(['books', 'bookData'], 'readwrite');
+    tx.objectStore('books').put(meta);
+    // Only (re)write the heavy bytes when provided, so metadata-only updates
+    // don't need the EPUB in hand.
+    if (data !== undefined) {
+        tx.objectStore('bookData').put({ id: book.id, data });
+    }
+    await tx.done;
 }
 
 export async function getBook(id) {
     const db = await getDB();
-    return db.get('books', id);
+    const meta = await db.get('books', id);
+    if (!meta) return undefined;
+    if (meta.data !== undefined) return meta; // legacy record (pre-migration)
+    const file = await db.get('bookData', id);
+    return { ...meta, data: file ? file.data : undefined };
 }
 
+// Returns metadata only (no EPUB bytes) — safe to load the whole library.
 export async function getAllBooks() {
     const db = await getDB();
     return db.getAll('books');
@@ -67,10 +102,11 @@ export async function getAllBooks() {
 
 export async function deleteBook(id) {
     const db = await getDB();
-    const tx = db.transaction(['books', 'positions', 'ttsCache', 'dialogueAnalysis', 'voiceOverrides', 'novelChapters'], 'readwrite');
+    const tx = db.transaction(['books', 'bookData', 'positions', 'ttsCache', 'dialogueAnalysis', 'voiceOverrides', 'novelChapters'], 'readwrite');
 
     await Promise.all([
         tx.objectStore('books').delete(id),
+        tx.objectStore('bookData').delete(id),
         tx.objectStore('positions').delete(id),
         // Clear web-novel source chapters for this book (using index)
         (async () => {
