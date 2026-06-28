@@ -239,6 +239,13 @@ const WM_DECO_TEST = /[☀-➿⬀-⯿]/u;
 const WM_HOMO = /[Ͱ-ϿЀ-ӿ℀-⅏Ａ-ｚ\u{1D400}-\u{1D7FF}]/u;
 const WM_SEG = new RegExp('[' + WM_DECO + '][^' + WM_DECO + ']{0,80}?[' + WM_DECO + ']', 'gu');
 const WM_WORD = /[\p{L}\u{1D400}-\u{1D7FF}]{6,12}/gu;
+const WM_BRAND = /\b(only on|exclusive on|official version|original source|read (it|this|the)? ?on|visit novelight|the official source)\b/;
+
+// A parenthetical is part of the watermark only if it carries a homoglyph or a
+// brand phrase — so genuine prose parentheses right after a watermark are kept.
+function wmIsWatermarkParen(p) {
+    return WM_HOMO.test(p) || WM_BRAND.test(wmFold(p));
+}
 
 function wmFold(t) {
     return t.replace(/[I|1]/g, 'l').replace(/0/g, 'o')
@@ -251,8 +258,8 @@ function wmFold(t) {
 function stripWatermarks(text) {
     if (!text || (!WM_DECO_TEST.test(text) && !WM_HOMO.test(text))) return text;
     text = text.replace(WM_SEG, m => WM_HOMO.test(m) ? '\x00' : m);
-    text = text.replace(/\x00\s*\([^)]*\)/gu, ' ');
-    text = text.replace(/\x00/g, ' ');
+    text = text.replace(/\x00\s*(\([^)]*\))?/gu, (full, paren) =>
+        (paren && wmIsWatermarkParen(paren)) ? ' ' : (paren ? ' ' + paren : ' '));
     text = text.replace(WM_WORD, w => (WM_HOMO.test(w) && wmFold(w) === 'novelight') ? '' : w);
     text = text.replace(/\([^)]*\)/gu, m => (WM_HOMO.test(m) && wmFold(m).includes('novelight')) ? '' : m);
     return text.replace(/[ \t ]{2,}/g, ' ').replace(/\s+([.,!?;:"”’])/g, '$1').trim();
