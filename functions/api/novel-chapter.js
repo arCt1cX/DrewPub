@@ -52,17 +52,47 @@ function clean(html) {
     const blockRe = /<div[^>]*>([\s\S]*?)<\/div>/gi;
     let m;
     while ((m = blockRe.exec(s)) !== null) {
-        const text = esc(m[1].replace(/<[^>]+>/g, '').trim());
+        const text = esc(stripWatermarks(m[1].replace(/<[^>]+>/g, '').trim()));
         if (text) parts.push(`<p>${text}</p>`);
     }
 
     // Fallback: if no <div> blocks matched, keep stripped text as one paragraph.
     if (parts.length === 0) {
-        const text = esc(s.replace(/<[^>]+>/g, '').trim());
+        const text = esc(stripWatermarks(s.replace(/<[^>]+>/g, '').trim()));
         if (text) parts.push(`<p>${text}</p>`);
     }
 
     return parts.join('\n');
+}
+
+// ── Anti-piracy watermark removal ──────────────────────────────
+// novelight randomly injects an inline watermark like "❖ Nоvеlіgһt ❖ (Only on
+// Novelight)" mid-sentence — flanked by decorative symbols and spelled with
+// non-ASCII homoglyphs (Cyrillic/math letters). Real prose never mixes those,
+// so we remove a symbol-delimited run that contains a non-ASCII letter (plus an
+// adjacent parenthetical), without having to decode the obfuscated word.
+const WM_DECO = '\\u2600-\\u27BF\\u2B00-\\u2BFF\\u2190-\\u21FF';
+const WM_DECO_TEST = /[☀-➿⬀-⯿]/u;
+const WM_HOMO = /[Ͱ-ϿЀ-ӿ℀-⅏Ａ-ｚ\u{1D400}-\u{1D7FF}]/u;
+const WM_SEG = new RegExp('[' + WM_DECO + '][^' + WM_DECO + ']{0,80}?[' + WM_DECO + ']', 'gu');
+const WM_WORD = /[\p{L}\u{1D400}-\u{1D7FF}]{6,12}/gu;
+
+function wmFold(t) {
+    return t.replace(/[I|1]/g, 'l').replace(/0/g, 'o')
+        .normalize('NFKD').replace(/[̀-ͯ]/g, '')
+        .replace(/[оОΟ]/g, 'o').replace(/[еЕҽ]/g, 'e').replace(/[іІ]/g, 'i').replace(/[һҺ]/g, 'h')
+        .replace(/[ѕ]/g, 's').replace(/[ӏ]/g, 'l').replace(/[аА]/g, 'a').replace(/[сС]/g, 'c')
+        .replace(/[рР]/g, 'p').replace(/[ɡ]/g, 'g').toLowerCase();
+}
+
+function stripWatermarks(text) {
+    if (!text || (!WM_DECO_TEST.test(text) && !WM_HOMO.test(text))) return text;
+    text = text.replace(WM_SEG, m => WM_HOMO.test(m) ? '\x00' : m);   // mark symbol+homoglyph runs
+    text = text.replace(/\x00\s*\([^)]*\)/gu, ' ');                    // drop attached parenthetical
+    text = text.replace(/\x00/g, ' ');
+    text = text.replace(WM_WORD, w => (WM_HOMO.test(w) && wmFold(w) === 'novelight') ? '' : w);
+    text = text.replace(/\([^)]*\)/gu, m => (WM_HOMO.test(m) && wmFold(m).includes('novelight')) ? '' : m);
+    return text.replace(/[ \t ]{2,}/g, ' ').replace(/\s+([.,!?;:"”’])/g, '$1').trim();
 }
 
 // Decode the few HTML entities the source uses, then re-escape for XHTML safety.

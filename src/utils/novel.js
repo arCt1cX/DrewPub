@@ -224,7 +224,38 @@ function epubChapters(stored) {
     if (stored.length === 0) {
         return [{ title: 'Download pending', html: '<p>Chapters not downloaded yet. Open the ⋯ menu and tap “Check for new chapters” to download.</p>' }];
     }
-    return stored.map(c => ({ title: chapterDisplayTitle(c), html: c.html }));
+    return stored.map(c => ({ title: chapterDisplayTitle(c), html: stripWatermarks(c.html) }));
+}
+
+// ── Anti-piracy watermark removal ──────────────────────────────
+// novelight randomly injects an inline watermark like "❖ Nоvеlіgһt ❖ (Only on
+// Novelight)" mid-sentence — flanked by decorative symbols and spelled with
+// non-ASCII homoglyphs. Real prose never mixes those, so we strip a
+// symbol-delimited run containing a non-ASCII letter (+ adjacent parenthetical).
+// Applied at EPUB-build time so already-downloaded chapters are cleaned on the
+// next rebuild — no re-download needed.
+const WM_DECO = '\\u2600-\\u27BF\\u2B00-\\u2BFF\\u2190-\\u21FF';
+const WM_DECO_TEST = /[☀-➿⬀-⯿]/u;
+const WM_HOMO = /[Ͱ-ϿЀ-ӿ℀-⅏Ａ-ｚ\u{1D400}-\u{1D7FF}]/u;
+const WM_SEG = new RegExp('[' + WM_DECO + '][^' + WM_DECO + ']{0,80}?[' + WM_DECO + ']', 'gu');
+const WM_WORD = /[\p{L}\u{1D400}-\u{1D7FF}]{6,12}/gu;
+
+function wmFold(t) {
+    return t.replace(/[I|1]/g, 'l').replace(/0/g, 'o')
+        .normalize('NFKD').replace(/[̀-ͯ]/g, '')
+        .replace(/[оОΟ]/g, 'o').replace(/[еЕҽ]/g, 'e').replace(/[іІ]/g, 'i').replace(/[һҺ]/g, 'h')
+        .replace(/[ѕ]/g, 's').replace(/[ӏ]/g, 'l').replace(/[аА]/g, 'a').replace(/[сС]/g, 'c')
+        .replace(/[рР]/g, 'p').replace(/[ɡ]/g, 'g').toLowerCase();
+}
+
+function stripWatermarks(text) {
+    if (!text || (!WM_DECO_TEST.test(text) && !WM_HOMO.test(text))) return text;
+    text = text.replace(WM_SEG, m => WM_HOMO.test(m) ? '\x00' : m);
+    text = text.replace(/\x00\s*\([^)]*\)/gu, ' ');
+    text = text.replace(/\x00/g, ' ');
+    text = text.replace(WM_WORD, w => (WM_HOMO.test(w) && wmFold(w) === 'novelight') ? '' : w);
+    text = text.replace(/\([^)]*\)/gu, m => (WM_HOMO.test(m) && wmFold(m).includes('novelight')) ? '' : m);
+    return text.replace(/[ \t ]{2,}/g, ' ').replace(/\s+([.,!?;:"”’])/g, '$1').trim();
 }
 
 // "Chapter 1: Nightmare Begins" — number prefix from the source's chapter index.
