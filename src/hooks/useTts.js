@@ -201,22 +201,11 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
         // Single-voice mode
         if (!multiVoice) return narratorVoice;
 
-        // Narration / heading → narrator voice (unless continuation of dialogue in same block)
+        // Narration / heading → always the narrator voice.
+        // (Previously a "same block as previous dialogue" heuristic kept the
+        // character voice here, which wrongly made narration after a quote
+        // speak in the character's voice — and linger past the quote.)
         if (segment.segType !== 'dialogue') {
-            // Check if this segment is in the same block as a preceding dialogue segment
-            // (the quote may have been split and this piece wasn't detected as dialogue)
-            if (typeof index === 'number' && index > 0) {
-                const prev = segmentsRef.current[index - 1];
-                if (prev?.segType === 'dialogue' && prev.blockIndex === segment.blockIndex) {
-                    // Same block, previous was dialogue — keep the dialogue voice
-                    const speaker = prev.speaker;
-                    if (speaker && assignment[speaker]) return assignment[speaker];
-                    // Fallback: use a non-narrator voice for consistency
-                    const allNonNarrator = Object.values(presets)
-                        .filter(p => p.id !== narratorVoice && p.id !== presets.narrator.id);
-                    return allNonNarrator.length > 0 ? allNonNarrator[0].id : narratorVoice;
-                }
-            }
             return narratorVoice;
         }
 
@@ -250,34 +239,28 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
         return allNonNarrator.length > 0 ? allNonNarrator[0].id : narratorVoice;
     }, []);
 
-    // ── Speak a single segment ──────────────────────────────
-    const speakSegment = useCallback(async (index) => {
-        if (stoppedRef.current || !activeRef.current) return false;
-
-        const engine = engineRef.current;
+    // ── Build a playback chunk ──────────────────────────────
+    // Merge consecutive segments that share the SAME voice into one synthesis
+    // request. Kokoro then renders natural pauses between the sentences instead
+    // of a hard silent gap (separate audio clip) at every period — which is
+    // what made playback feel choppy. Voice changes still start a new chunk.
+    const buildChunk = useCallback((startIndex) => {
         const segments = segmentsRef.current;
+        const first = segments[startIndex];
+        const voice = getVoiceForSegment(first, startIndex);
+        const MAX_CHARS = 600; // keep requests short enough for low latency
+        let text = first.text;
+        let end = startIndex;
 
-        if (!engine || index >= segments.length || index < 0) return false;
-
-        const segment = segments[index];
-        setCurrentSegmentIndex(index);
-        setCurrentSpeaker(segment.speaker || 'Narrator');
-
-        highlightSegment(index);
-
-        const voiceId = getVoiceForSegment(segment, index);
-        const rate = settingsRef.current.ttsRate || 1.0;
-        const pitch = settingsRef.current.ttsPitch || 1.0;
-
-        try {
-            await engine.speak(segment.text, voiceId, rate, pitch);
-            return true;
-        } catch (err) {
-            if (stoppedRef.current) return false;
-            console.warn('TTS speak failed:', err);
-            return false;
+        for (let j = startIndex + 1; j < segments.length; j++) {
+            if (getVoiceForSegment(segments[j], j) !== voice) break;
+            if (text.length + segments[j].text.length + 1 > MAX_CHARS) break;
+            text += ' ' + segments[j].text;
+            end = j;
         }
-    }, [highlightSegment, getVoiceForSegment]);
+
+        return { text, voice, end, speaker: first.speaker };
+    }, [getVoiceForSegment]);
 
     // ── Build voice assignment from characters ──────────────
     const buildVoiceAssignment = useCallback((chars) => {
@@ -438,37 +421,95 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
         let consecutiveFailures = 0;
         const MAX_FAILURES = 3;
 
-        for (let i = startIndex; i < segmentsRef.current.length; i++) {
+        let i = startIndex;
+        while (i < segmentsRef.current.length) {
             // Bail if a newer loop started (nextSegment/prevSegment)
             if (loopIdRef.current !== thisLoop) return;
             if (stoppedRef.current || !activeRef.current) break;
 
-            // Prefetch next segment
-            if (i + 1 < segmentsRef.current.length && engineRef.current?.prefetch) {
-                const nextSeg = segmentsRef.current[i + 1];
-                const nextVoice = getVoiceForSegment(nextSeg, i + 1);
-                const rate = settingsRef.current.ttsRate || 1.0;
-                const pitch = settingsRef.current.ttsPitch || 1.0;
-                engineRef.current.prefetch(nextSeg.text, nextVoice, rate, pitch);
+            const chunk = buildChunk(i);
+            const rate = settingsRef.current.ttsRate || 1.0;
+            const pitch = settingsRef.current.ttsPitch || 1.0;
+
+            // Prefetch the NEXT chunk (with its own voice) so voice changes
+            // don't stall waiting on a fresh request.
+            if (chunk.end + 1 < segmentsRef.current.length && engineRef.current?.prefetch) {
+                const next = buildChunk(chunk.end + 1);
+                engineRef.current.prefetch(next.text, next.voice, rate, pitch);
             }
 
-            const success = await speakSegment(i);
+            setCurrentSegmentIndex(i);
+            setCurrentSpeaker(chunk.speaker || 'Narrator');
+            highlightSegment(i);
+
+            // ── Sentence-following highlight ──
+            // A chunk is one audio clip covering several sentences. We estimate
+            // each sentence's slice of the clip by its character length and
+            // advance the highlight as the audio plays (Kokoro gives no per-word
+            // timestamps, so this is a proportional estimate — good enough to
+            // follow along). Only the cloud engine exposes an <audio> element.
+            const chunkStart = i;
+            const chunkEnd = chunk.end;
+            const audioEl = audioElRef.current;
+            let stopFollow = () => {};
+            if (audioEl && chunkEnd > chunkStart) {
+                const lens = [];
+                let total = 0;
+                for (let k = chunkStart; k <= chunkEnd; k++) {
+                    const L = Math.max(1, (segmentsRef.current[k]?.text || '').length);
+                    lens.push(L);
+                    total += L;
+                }
+                const fracs = [];
+                let acc = 0;
+                for (const L of lens) { acc += L; fracs.push(acc / total); }
+
+                let lastHi = chunkStart;
+                const onTime = () => {
+                    const d = audioEl.duration;
+                    if (!d || !isFinite(d)) return;
+                    const p = audioEl.currentTime / d;
+                    let k = 0;
+                    while (k < fracs.length - 1 && p >= fracs[k]) k++;
+                    const idx = chunkStart + k;
+                    if (idx !== lastHi) {
+                        lastHi = idx;
+                        setCurrentSegmentIndex(idx);
+                        setCurrentSpeaker(segmentsRef.current[idx]?.speaker || 'Narrator');
+                        highlightSegment(idx);
+                    }
+                };
+                audioEl.addEventListener('timeupdate', onTime);
+                stopFollow = () => audioEl.removeEventListener('timeupdate', onTime);
+            }
+
+            let success;
+            try {
+                await engineRef.current.speak(chunk.text, chunk.voice, rate, pitch);
+                success = true;
+            } catch (err) {
+                success = false;
+                if (!stoppedRef.current) console.warn('TTS speak failed:', err);
+            } finally {
+                stopFollow();
+            }
 
             // Check again after await — loop may have been superseded
             if (loopIdRef.current !== thisLoop) return;
             if (!success && stoppedRef.current) break;
             if (!success) {
                 consecutiveFailures++;
-                console.warn(`[TTS] Segment ${i} failed (${consecutiveFailures}/${MAX_FAILURES})`);
+                console.warn(`[TTS] Chunk at ${i} failed (${consecutiveFailures}/${MAX_FAILURES})`);
                 if (consecutiveFailures >= MAX_FAILURES) {
                     console.error('[TTS] Too many consecutive failures, stopping');
                     stoppedRef.current = true;
                     break;
                 }
                 await new Promise(r => setTimeout(r, 200));
-                continue;
+                continue; // retry same chunk
             }
             consecutiveFailures = 0;
+            i = chunk.end + 1;
         }
 
         // Only proceed if this is still the active loop
@@ -517,7 +558,7 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
             setCurrentSpeaker(null);
             clearHighlights();
         }
-    }, [speakSegment, getVoiceForSegment, renditionRef, getIframeDoc, clearHighlights, buildVoiceAssignment]);
+    }, [buildChunk, highlightSegment, renditionRef, getIframeDoc, clearHighlights, buildVoiceAssignment]);
 
     // ── Public API ──────────────────────────────────────────
 
