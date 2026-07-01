@@ -113,7 +113,7 @@ function createCloudEngine() {
                 try {
                     const blob = await fetchAudio(text, voice, rate || 1.0, pitch || 1.0);
                     prefetchCache.set(key, blob);
-                    while (prefetchCache.size > 8) {
+                    while (prefetchCache.size > 12) {
                         prefetchCache.delete(prefetchCache.keys().next().value);
                     }
                     resolve(blob);

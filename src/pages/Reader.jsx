@@ -803,13 +803,13 @@ export default function Reader() {
                     onToggleToc={() => { setShowToc(!showToc); setShowSettings(false); }}
                     onToggleSettings={() => { setShowSettings(!showSettings); setShowToc(false); }}
                     onToggleTts={() => {
-                        if (tts.ttsActive) {
+                        if (tts.ttsActive || tts.ttsLoading) {
                             tts.stopTts();
                         } else {
                             tts.startTts();
                         }
                     }}
-                    ttsActive={tts.ttsActive}
+                    ttsActive={tts.ttsActive || tts.ttsLoading}
                     onPrev={() => renditionRef.current?.prev()}
                     onNext={() => renditionRef.current?.next()}
                 />
@@ -857,10 +857,11 @@ export default function Reader() {
                 />
             )}
 
-            {/* TTS Controls */}
-            {tts.ttsActive && (
+            {/* TTS Controls — shown while loading too, so pressing play gives
+                immediate visual feedback (spinner) during engine init + AI analysis */}
+            {(tts.ttsActive || tts.ttsLoading) && (
                 <TtsControls
-                    visible={tts.ttsActive}
+                    visible={tts.ttsActive || tts.ttsLoading}
                     playing={tts.ttsPlaying}
                     paused={tts.ttsPaused}
                     loading={tts.ttsLoading}

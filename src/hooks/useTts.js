@@ -533,12 +533,14 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
             const rate = settingsRef.current.ttsRate || 1.0;
             const pitch = settingsRef.current.ttsPitch || 1.0;
 
-            // Prefetch the next TWO chunks so slow Kokoro generation (free CPU
-            // Space runs near real-time) stays ahead of playback — this is what
-            // causes the occasional dead gaps between chunks.
+            // Keep a deep lookahead buffer (4 chunks). In dense dialogue the
+            // voice changes constantly → chunks are short → a shallow buffer
+            // drains during a burst of short lines and playback stalls. The
+            // engine serializes and dedupes these, so re-requesting an
+            // already-fetched chunk is free.
             if (engineRef.current?.prefetch) {
                 let pi = chunk.end + 1;
-                for (let p = 0; p < 2 && pi < segmentsRef.current.length; p++) {
+                for (let p = 0; p < 4 && pi < segmentsRef.current.length; p++) {
                     const next = buildChunk(pi);
                     engineRef.current.prefetch(next.text, next.voice, rate, pitch);
                     pi = next.end + 1;
@@ -649,6 +651,7 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
 
     const startTts = useCallback(async () => {
         setTtsLoading(true);
+        stoppedRef.current = false; // allow stop-during-loading to cancel us
 
         try {
             // ── Warm up audio on user gesture (iOS requirement) ──
@@ -737,6 +740,12 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
             // voices; cached chapters start instantly.
             const chapterHref = renditionRef.current?.location?.start?.href || '0';
             parsed = await analyzeChapter(parsed, chapterHref);
+
+            // User pressed stop while we were analyzing → abort cleanly
+            if (stoppedRef.current) {
+                setTtsLoading(false);
+                return;
+            }
 
             // Apply gender overrides on top of the analysis
             for (const [name, info] of Object.entries(voiceOverridesRef.current)) {
