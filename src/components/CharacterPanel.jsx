@@ -7,10 +7,21 @@ export default function CharacterPanel({
     characters,
     characterVoices,
     engineType,
+    engineActive,
     onChangeVoice,
+    onClearAnalysis,
     onClose,
 }) {
     const presets = VOICE_PRESETS[engineType || 'cloud'] || VOICE_PRESETS.cloud;
+
+    const handleClear = () => {
+        if (!onClearAnalysis) return;
+        if (window.confirm('Clear the detected characters and re-analyze from scratch? This removes cached speaker data for this book.')) {
+            onClearAnalysis();
+        }
+    };
+
+    const usingFallback = engineActive === 'system' && (engineType || 'cloud') !== 'system';
     const voices = Object.entries(presets).map(([key, v]) => ({
         id: v.id,
         label: v.label,
@@ -45,10 +56,20 @@ export default function CharacterPanel({
                     <IconMic size={15} />
                     Characters
                 </h3>
-                <button className="char-close-btn" onClick={onClose}>
-                    <IconClose size={14} />
-                </button>
+                <div className="char-header-actions">
+                    <button className="char-clear-btn" onClick={handleClear} title="Clear & re-analyze">
+                        Clear
+                    </button>
+                    <button className="char-close-btn" onClick={onClose}>
+                        <IconClose size={14} />
+                    </button>
+                </div>
             </div>
+            {usingFallback && (
+                <p className="char-fallback-note">
+                    ⚠ Using system voice (Kokoro server unreachable) — highlighting may not follow.
+                </p>
+            )}
             <div className="char-list">
                 {sorted.map(([name, info]) => {
                     const currentVoice = characterVoices[name] || presets.narrator.id;

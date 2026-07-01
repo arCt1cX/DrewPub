@@ -888,7 +888,9 @@ export default function Reader() {
                     characters={tts.characters}
                     characterVoices={tts.characterVoices}
                     engineType={settings.ttsEngine || 'cloud'}
+                    engineActive={tts.engineActive}
                     onChangeVoice={tts.updateCharacterVoice}
+                    onClearAnalysis={tts.clearAnalysis}
                     onClose={() => setShowCharacterPanel(false)}
                 />
             )}

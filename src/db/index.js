@@ -231,6 +231,18 @@ export async function getDialogueAnalysis(bookId, chapterIndex) {
     return db.get('dialogueAnalysis', `${bookId}-${chapterIndex}`);
 }
 
+// Wipe all cached dialogue analysis (speakers + character registry) for a book,
+// so the next playback re-analyzes every chapter from scratch. Used to purge
+// stale/garbage results from earlier analysis versions.
+export async function clearDialogueAnalysis(bookId) {
+    const db = await getDB();
+    const keys = await db.getAllKeysFromIndex('dialogueAnalysis', 'bookId', bookId);
+    const tx = db.transaction('dialogueAnalysis', 'readwrite');
+    for (const k of keys) tx.store.delete(k);
+    await tx.done;
+    return keys.length;
+}
+
 export async function getBookCharacters(bookId) {
     const db = await getDB();
     const all = await db.getAllFromIndex('dialogueAnalysis', 'bookId', bookId);

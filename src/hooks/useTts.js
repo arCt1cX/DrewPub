@@ -13,7 +13,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { extractChapterText, createTtsSegments } from '../utils/ttsTextExtractor';
 import { parseDialogue, assignVoicesToCharacters, isValidCharacterName, normalizeCharacterName } from '../utils/dialogueParser';
 import { createTTSEngine, VOICE_PRESETS, createSilentWavBlob } from '../utils/ttsEngine';
-import { saveDialogueAnalysis, getDialogueAnalysis, saveVoiceOverrides, getVoiceOverrides, getBookCharacters } from '../db';
+import { saveDialogueAnalysis, getDialogueAnalysis, saveVoiceOverrides, getVoiceOverrides, getBookCharacters, clearDialogueAnalysis } from '../db';
 
 /**
  * @param {Object} params
@@ -32,6 +32,7 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
     const [totalSegments, setTotalSegments] = useState(0);
     const [characters, setCharacters] = useState({});       // { name: { gender, count } }
     const [characterVoices, setCharacterVoices] = useState({}); // { name: voiceId }
+    const [engineActive, setEngineActive] = useState(null); // 'cloud' | 'system' — which engine actually initialized
 
     const engineRef = useRef(null);
     const segmentsRef = useRef([]);
@@ -57,6 +58,8 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
 
         if (success) {
             engineRef.current = engine;
+            setEngineActive(engine.type);
+            console.log(`[TTS] Engine ready: ${engine.type}`);
             return true;
         }
 
@@ -66,9 +69,11 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
             const fallback = createTTSEngine('system');
             await fallback.init();
             engineRef.current = fallback;
+            setEngineActive(fallback.type);
             return true;
         }
 
+        setEngineActive(null);
         return false;
     }, []);
 
@@ -293,12 +298,26 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
             const dialogueSegs = parsed.segments.filter(s => s.segType === 'dialogue');
             if (dialogueSegs.length === 0) return parsed;
 
-            // Merge the book-wide character registry with this chapter's so the
-            // AI reuses established names/genders → stable voices across chapters.
-            let knownCharacters = parsed.characters;
+            // Hint the AI with ESTABLISHED characters so it reuses their exact
+            // spelling → stable voices across chapters. Critically, this list is
+            // curated: only validly-named characters that recur (count >= 2) are
+            // included. Feeding the raw registry back caused the AI to re-insert
+            // one-off regex/analysis noise from earlier chapters as if it were
+            // real ("riaggiunge cose a caso").
+            let knownCharacters = {};
             try {
                 const bookChars = await getBookCharacters(bookId);
-                knownCharacters = { ...bookChars, ...parsed.characters };
+                const merged = { ...bookChars };
+                for (const [n, info] of Object.entries(parsed.characters)) {
+                    if (!merged[n]) merged[n] = { ...info };
+                    else merged[n].count = (merged[n].count || 0) + (info.count || 0);
+                }
+                knownCharacters = Object.fromEntries(
+                    Object.entries(merged)
+                        .filter(([name, info]) => isValidCharacterName(name) && (info.count || 0) >= 2)
+                        .sort((a, b) => (b[1].count || 0) - (a[1].count || 0))
+                        .slice(0, 25)
+                );
             } catch { /* registry optional */ }
 
             const payload = {
@@ -464,11 +483,17 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
                 let acc = 0;
                 for (const L of lens) { acc += L; fracs.push(acc / total); }
 
+                // Kokoro's mp3 often lacks a duration header → audioEl.duration
+                // is Infinity/NaN. Fall back to an estimate (~14 chars/sec at 1x,
+                // scaled by speed) so the highlight still advances. currentTime
+                // is always reliable, so we drive progress off that.
+                const estTotal = total / (14 * (settingsRef.current.ttsRate || 1.0));
+
                 let lastHi = chunkStart;
                 const onTime = () => {
                     const d = audioEl.duration;
-                    if (!d || !isFinite(d)) return;
-                    const p = audioEl.currentTime / d;
+                    const dur = (d && isFinite(d) && d > 0) ? d : estTotal;
+                    const p = audioEl.currentTime / dur;
                     let k = 0;
                     while (k < fracs.length - 1 && p >= fracs[k]) k++;
                     const idx = chunkStart + k;
@@ -777,6 +802,27 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
         playFromIndex(prevIdx);
     }, [currentSegmentIndex, playFromIndex]);
 
+    // ── Clear cached dialogue analysis for this book ────────
+    // Purges the stored per-chapter speakers + character registry so the next
+    // playback re-analyzes from a clean slate (no stale/garbage names).
+    const clearAnalysis = useCallback(async () => {
+        let removed = 0;
+        try { removed = await clearDialogueAnalysis(bookId); } catch { /* ignore */ }
+
+        // Reset in-memory state so the panel empties immediately.
+        setCharacters({});
+        setCharacterVoices({});
+        voiceAssignmentRef.current = {};
+        if (parsedDataRef.current) {
+            for (const seg of parsedDataRef.current.segments) {
+                if (seg.segType === 'dialogue') { seg.speaker = null; seg.gender = null; }
+            }
+            parsedDataRef.current.characters = {};
+        }
+        console.log(`[TTS] Cleared analysis for book (${removed} chapters)`);
+        return removed;
+    }, [bookId]);
+
     // ── Cleanup on unmount ──────────────────────────────────
     useEffect(() => {
         return () => {
@@ -814,6 +860,7 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
         totalSegments,
         characters,
         characterVoices,
+        engineActive,
 
         startTts,
         stopTts,
@@ -822,5 +869,6 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
         nextSegment,
         prevSegment,
         updateCharacterVoice,
+        clearAnalysis,
     };
 }

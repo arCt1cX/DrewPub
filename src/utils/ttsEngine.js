@@ -103,7 +103,9 @@ function createCloudEngine() {
         async init() {
             try {
                 const resp = await fetch('/api/tts?test=1', {
-                    signal: AbortSignal.timeout ? AbortSignal.timeout(12000) : undefined,
+                    // HF Spaces cold-start can take ~20s; allow for it so we don't
+                    // needlessly fall back to the robotic system engine.
+                    signal: AbortSignal.timeout ? AbortSignal.timeout(25000) : undefined,
                 });
                 const data = await resp.json();
                 if (data.ok) {
