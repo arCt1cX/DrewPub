@@ -13,7 +13,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { extractChapterText, createTtsSegments } from '../utils/ttsTextExtractor';
 import { parseDialogue, assignVoicesToCharacters, isValidCharacterName, normalizeCharacterName } from '../utils/dialogueParser';
 import { createTTSEngine, VOICE_PRESETS, createSilentWavBlob } from '../utils/ttsEngine';
-import { saveDialogueAnalysis, getDialogueAnalysis, saveVoiceOverrides, getVoiceOverrides } from '../db';
+import { saveDialogueAnalysis, getDialogueAnalysis, saveVoiceOverrides, getVoiceOverrides, getBookCharacters } from '../db';
 
 /**
  * @param {Object} params
@@ -300,30 +300,39 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
         return auto;
     }, []);
 
-    // ── AI-enhanced dialogue analysis ───────────────────────
+    // ── AI dialogue analysis (Gemini — authoritative) ──────
+    // The whole chapter is sent to /api/analyze-dialogue. The AI result is
+    // treated as the source of truth for dialogue speakers: it can add a
+    // speaker the regex missed AND clear a speaker the regex got wrong.
+    // On any failure we return `parsed` untouched → local regex stays as-is.
     const enhanceWithAI = useCallback(async (parsed) => {
         try {
-            const dialogueSegs = parsed.segments
-                .map((s, i) => ({ ...s, index: i }))
-                .filter(s => s.segType === 'dialogue');
-
+            const dialogueSegs = parsed.segments.filter(s => s.segType === 'dialogue');
             if (dialogueSegs.length === 0) return parsed;
+
+            // Merge the book-wide character registry with this chapter's so the
+            // AI reuses established names/genders → stable voices across chapters.
+            let knownCharacters = parsed.characters;
+            try {
+                const bookChars = await getBookCharacters(bookId);
+                knownCharacters = { ...bookChars, ...parsed.characters };
+            } catch { /* registry optional */ }
 
             const payload = {
                 segments: parsed.segments.map((s, i) => ({
-                    text: s.text.substring(0, 400),
+                    text: s.text,
                     segType: s.segType,
                     speaker: s.speaker || null,
                     index: i,
                 })),
-                knownCharacters: parsed.characters,
+                knownCharacters,
             };
 
             const resp = await fetch('/api/analyze-dialogue', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload),
-                signal: AbortSignal.timeout ? AbortSignal.timeout(30000) : undefined,
+                signal: AbortSignal.timeout ? AbortSignal.timeout(40000) : undefined,
             });
 
             if (!resp.ok) {
@@ -334,52 +343,54 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
             const data = await resp.json();
             if (!data.speakers || !Array.isArray(data.speakers)) return parsed;
 
-            let updated = 0;
+            // Index the AI verdicts by segment index. The AI is authoritative:
+            // where it has an opinion we overwrite the regex result entirely.
+            const verdict = new Map();
             for (const item of data.speakers) {
-                const seg = parsed.segments[item.index];
-                if (!seg || seg.segType !== 'dialogue') continue;
-
-                // AI found a speaker where regex didn't, or confirmed/improved
-                if (item.speaker) {
-                    // Normalize the AI-returned name
-                    let aiName = normalizeCharacterName(item.speaker);
-                    if (!aiName || !isValidCharacterName(aiName)) continue;
-
-                    // Deduplicate: check if this name already exists under different casing
-                    const lowerName = aiName.toLowerCase();
-                    const existingKey = Object.keys(parsed.characters)
-                        .find(k => k.toLowerCase() === lowerName);
-                    if (existingKey) aiName = existingKey;
-
-                    const wasEmpty = !seg.speaker;
-                    seg.speaker = aiName;
-                    if (item.gender && item.gender !== 'unknown') {
-                        seg.gender = item.gender;
-                    }
-
-                    // Register/update character
-                    if (!parsed.characters[aiName]) {
-                        parsed.characters[aiName] = {
-                            gender: item.gender || 'unknown',
-                            count: 0,
-                        };
-                    }
-                    if (item.gender && item.gender !== 'unknown') {
-                        parsed.characters[aiName].gender = item.gender;
-                    }
-                    parsed.characters[aiName].count++;
-
-                    if (wasEmpty) updated++;
-                }
+                if (typeof item.index !== 'number') continue;
+                let name = item.speaker ? normalizeCharacterName(item.speaker) : null;
+                if (name && !isValidCharacterName(name)) name = null;
+                verdict.set(item.index, { speaker: name, gender: item.gender || 'unknown' });
             }
 
-            console.log(`[AI] Enhanced ${updated} dialogue segments with speaker info`);
+            // Apply verdicts to segments, then rebuild the character map from the
+            // FINAL speakers so regex-invented ghosts disappear entirely.
+            const characters = {};
+            const canonicalOf = {}; // lowercase → canonical casing
+
+            for (let i = 0; i < parsed.segments.length; i++) {
+                const seg = parsed.segments[i];
+                if (seg.segType !== 'dialogue') continue;
+
+                if (verdict.has(i)) {
+                    const v = verdict.get(i);
+                    seg.speaker = v.speaker;
+                    seg.gender = v.speaker ? (v.gender !== 'unknown' ? v.gender : seg.gender) : null;
+                }
+                // (segments the AI didn't mention keep their regex speaker)
+
+                if (!seg.speaker) continue;
+
+                const lower = seg.speaker.toLowerCase();
+                const canonical = canonicalOf[lower] || seg.speaker;
+                canonicalOf[lower] = canonical;
+                seg.speaker = canonical;
+
+                if (!characters[canonical]) {
+                    characters[canonical] = { gender: seg.gender || 'unknown', count: 0 };
+                }
+                if (seg.gender && seg.gender !== 'unknown') characters[canonical].gender = seg.gender;
+                characters[canonical].count++;
+            }
+
+            parsed.characters = characters;
+            console.log(`[AI] ${Object.keys(characters).length} characters, ${verdict.size} lines resolved`);
             return parsed;
         } catch (err) {
             console.warn('[AI] Enhancement failed (non-blocking):', err.message);
             return parsed;
         }
-    }, []);
+    }, [bookId]);
 
     // ── Update a character's voice (from CharacterPanel) ────
     const updateCharacterVoice = useCallback(async (charName, voiceId, gender) => {

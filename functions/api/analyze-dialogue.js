@@ -1,11 +1,21 @@
 /**
  * Cloudflare Pages Function: /api/analyze-dialogue
  *
- * Uses Workers AI (bound as `AI`) to identify speakers in dialogue segments.
+ * Identifies who speaks each line of dialogue in a chapter using Google
+ * Gemini (free tier). The whole chapter is sent in a single request so the
+ * model has full context to resolve speakers across long exchanges — far more
+ * reliable than the previous per-line Workers-AI approach.
  *
  * POST /api/analyze-dialogue
  *   Body: { segments: [ { text, segType, speaker?, index } ], knownCharacters: { name: { gender } } }
- *   Returns: { speakers: [ { index, speaker, gender } ] }
+ *   Returns: { speakers: [ { index, speaker, gender } ] }   // one entry per dialogue segment
+ *
+ * Environment variable:
+ *   GEMINI_API_KEY — Google AI Studio API key (starts with "AIza…")
+ *   GEMINI_MODEL   — optional, defaults to "gemini-2.5-flash"
+ *
+ * If the key is missing or Gemini fails the endpoint returns an error and the
+ * client silently falls back to its local regex attribution.
  */
 
 const CORS = {
@@ -14,7 +24,8 @@ const CORS = {
     'Access-Control-Allow-Headers': 'Content-Type',
 };
 
-// Words that should never be identified as character names
+// Words that should never be identified as character names (last-line defense
+// against the model returning a stray common word / place).
 const NON_CHARACTER_WORDS = new Set([
     'the', 'but', 'and', 'then', 'with', 'that', 'this', 'what', 'how',
     'his', 'her', 'its', 'she', 'he', 'they', 'you', 'not', 'one',
@@ -27,17 +38,30 @@ const NON_CHARACTER_WORDS = new Set([
     'hall', 'house', 'inn', 'tavern', 'bridge', 'gate', 'road', 'street',
     'temple', 'church', 'palace', 'court', 'garden', 'library', 'school',
     'cave', 'mine', 'farm', 'port', 'bay', 'cliff', 'hill', 'peak', 'fort',
-    'chapter', 'part', 'book', 'page', 'narrator', 'unknown', 'none',
+    'chapter', 'part', 'book', 'page', 'narrator', 'unknown', 'none', 'null',
 ]);
 
 function isNonCharacterName(name) {
     if (!name || name.trim().length < 2) return true;
     const lower = name.trim().toLowerCase();
     if (NON_CHARACTER_WORDS.has(lower)) return true;
-    if (/^\d/.test(name)) return true;           // starts with digit
-    if (/^(the|a|an)\s/i.test(name)) return true; // "the X", "a X"
-    if (name.trim().length === 1) return true;     // single char
+    if (/^\d/.test(name)) return true;            // starts with digit
+    if (/^(the|a|an)\s/i.test(name)) return true;  // "the X", "a X"
+    if (name.trim().length === 1) return true;      // single char
     return false;
+}
+
+function normalizeName(name) {
+    if (!name) return null;
+    let n = String(name).trim();
+    if (n.length < 2) return null;
+    // ALL CAPS or all lowercase → Title Case
+    if (n === n.toUpperCase() || n === n.toLowerCase()) {
+        n = n.split(/\s+/)
+            .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+            .join(' ');
+    }
+    return n;
 }
 
 export async function onRequestOptions() {
@@ -46,142 +70,130 @@ export async function onRequestOptions() {
 
 export async function onRequestPost(context) {
     try {
-        const ai = context.env.AI;
-        if (!ai) {
+        const apiKey = context.env.GEMINI_API_KEY;
+        if (!apiKey) {
             return Response.json(
-                { error: 'AI binding not configured' },
+                { error: 'GEMINI_API_KEY not configured' },
                 { status: 500, headers: CORS }
             );
         }
+        const model = context.env.GEMINI_MODEL || 'gemini-2.5-flash';
 
         const body = await context.request.json();
         const { segments, knownCharacters } = body;
 
         if (!segments || !Array.isArray(segments) || segments.length === 0) {
-            return Response.json(
-                { error: 'No segments provided' },
-                { status: 400, headers: CORS }
-            );
+            return Response.json({ error: 'No segments provided' }, { status: 400, headers: CORS });
         }
 
-        // Build a compact representation of dialogue segments that need speaker identification
         const dialogueSegments = segments.filter(s => s.segType === 'dialogue');
-
         if (dialogueSegments.length === 0) {
             return Response.json({ speakers: [] }, { headers: CORS });
         }
 
-        // Build context window — include surrounding narration for each dialogue
-        const contextChunks = [];
-        for (const seg of dialogueSegments) {
-            const idx = seg.index;
-            // Get 1 segment before and after for context
-            const before = segments.find(s => s.index === idx - 1);
-            const after = segments.find(s => s.index === idx + 1);
+        // ── Build a numbered transcript of the WHOLE chapter ──
+        // Narration is included (unlabelled indices) so the model can use it as
+        // context; only dialogue indices need an answer.
+        const transcript = segments
+            .map(s => {
+                const tag = s.segType === 'dialogue' ? 'DIALOGUE' : 'NARRATION';
+                return `[${s.index}] ${tag}: ${String(s.text || '').replace(/\s+/g, ' ').trim()}`;
+            })
+            .join('\n');
 
-            let context = '';
-            if (before) context += before.text + ' ';
-            context += seg.text;
-            if (after) context += ' ' + after.text;
+        const dialogueIndices = dialogueSegments.map(s => s.index);
 
-            contextChunks.push({
-                index: seg.index,
-                existingSpeaker: seg.speaker || null,
-                context: context.substring(0, 500), // limit context size
-            });
-        }
-
-        const knownList = knownCharacters
-            ? Object.entries(knownCharacters).map(([name, info]) => `${name} (${info.gender || 'unknown'})`).join(', ')
+        const knownList = knownCharacters && Object.keys(knownCharacters).length
+            ? Object.entries(knownCharacters)
+                .map(([name, info]) => `${name} (${info.gender || 'unknown'})`)
+                .join(', ')
             : 'none yet';
 
-        // Batch into groups of max 15 to stay within token limits
-        const BATCH_SIZE = 15;
-        const allResults = [];
+        const prompt = `You are a literary dialogue analyst. Below is a numbered transcript of one chapter of a novel. Each line is tagged NARRATION or DIALOGUE.
 
-        for (let b = 0; b < contextChunks.length; b += BATCH_SIZE) {
-            const batch = contextChunks.slice(b, b + BATCH_SIZE);
+Known characters from earlier in this book (reuse these EXACT names when the speaker matches so voices stay consistent): ${knownList}
 
-            const numberedLines = batch.map((c, i) =>
-                `[${i}] ${c.existingSpeaker ? `(attributed: ${c.existingSpeaker}) ` : ''}${c.context}`
-            ).join('\n');
-
-            const prompt = `You are a literary dialogue analyst. Given numbered text excerpts from a novel, identify WHO is speaking in each quoted dialogue.
-
-Known characters so far: ${knownList}
+Your task: for EACH DIALOGUE line, determine which character is speaking it.
 
 Rules:
-- Return ONLY a JSON array, no explanation
-- Each element: {"i": <number>, "speaker": "<name>", "gender": "male"|"female"|"unknown"}
-- Use the character's PROPER NAME with correct capitalization (e.g., "Regis" not "regis" or "REGIS")
-- ONLY identify actual CHARACTERS (people/beings who speak). Do NOT include:
-  * Place names (cities, countries, buildings, forests, mountains, etc.)
-  * Common words or non-name words (e.g., "Whatever", "Nothing", "Something")
-  * Titles without names (e.g., just "Lord" or "Professor")
-  * Objects, concepts, or abstract nouns
-- If a character has already been identified, always use the EXACT SAME spelling
-- If you cannot determine the speaker, use "speaker": null (do NOT guess random words)
-- Detect gender from context clues (pronouns, titles, descriptions)
-- Pay attention to dialogue tags like "said", "asked" etc. AND contextual clues
+- Only these DIALOGUE line indices need an answer: [${dialogueIndices.join(', ')}]
+- Use the character's real PROPER NAME with correct capitalization (e.g. "Regis", not "regis" or "REGIS"). If a known character above matches, reuse that exact spelling.
+- Track the conversation flow: use dialogue tags ("said X", "X asked"), surrounding narration, and turn-taking to decide who speaks.
+- A speaker MUST be a person/being who can talk. NEVER return: place names, objects, titles alone ("Lord", "Professor"), common words ("Whatever", "Nothing"), or narration.
+- If you genuinely cannot tell who speaks a line, set speaker to null. Do NOT guess a random word.
+- Infer gender from pronouns/context: "male", "female", or "unknown".
 
-Excerpts:
-${numberedLines}
+Transcript:
+${transcript}`;
 
-JSON array:`;
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
-            try {
-                const response = await ai.run('@cf/meta/llama-3.1-8b-instruct', {
-                    messages: [
-                        { role: 'system', content: 'You are a precise JSON-only dialogue analyst. Always respond with valid JSON arrays only, no markdown, no explanation.' },
-                        { role: 'user', content: prompt },
-                    ],
-                    max_tokens: 1024,
+        const geminiResp = await fetch(geminiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                contents: [{ role: 'user', parts: [{ text: prompt }] }],
+                generationConfig: {
                     temperature: 0.1,
-                });
+                    maxOutputTokens: 8192,
+                    responseMimeType: 'application/json',
+                    responseSchema: {
+                        type: 'ARRAY',
+                        items: {
+                            type: 'OBJECT',
+                            properties: {
+                                index: { type: 'INTEGER' },
+                                speaker: { type: 'STRING', nullable: true },
+                                gender: { type: 'STRING', enum: ['male', 'female', 'unknown'] },
+                            },
+                            required: ['index', 'gender'],
+                        },
+                    },
+                },
+            }),
+        });
 
-                const text = (response.response || '').trim();
-
-                // Extract JSON array from response
-                const jsonMatch = text.match(/\[[\s\S]*?\]/);
-                if (jsonMatch) {
-                    try {
-                        const parsed = JSON.parse(jsonMatch[0]);
-                        for (const item of parsed) {
-                            if (typeof item.i === 'number' && item.i >= 0 && item.i < batch.length) {
-                                let speaker = item.speaker ? item.speaker.trim() : null;
-
-                                // Normalize name casing
-                                if (speaker) {
-                                    if (speaker === speaker.toUpperCase() || speaker === speaker.toLowerCase()) {
-                                        speaker = speaker.split(/\s+/).map(w =>
-                                            w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()
-                                        ).join(' ');
-                                    }
-                                }
-
-                                // Filter out obvious non-character names
-                                if (speaker && isNonCharacterName(speaker)) {
-                                    speaker = null;
-                                }
-
-                                allResults.push({
-                                    index: batch[item.i].index,
-                                    speaker: speaker,
-                                    gender: ['male', 'female'].includes(item.gender) ? item.gender : 'unknown',
-                                });
-                            }
-                        }
-                    } catch {
-                        console.warn('[AI] Failed to parse batch JSON:', text.substring(0, 200));
-                    }
-                }
-            } catch (aiErr) {
-                console.warn('[AI] Batch inference failed:', aiErr.message);
-                // Continue with other batches
-            }
+        if (!geminiResp.ok) {
+            const errText = await geminiResp.text().catch(() => geminiResp.statusText);
+            return Response.json(
+                { error: `Gemini error ${geminiResp.status}: ${errText.substring(0, 300)}` },
+                { status: 502, headers: CORS }
+            );
         }
 
-        return Response.json({ speakers: allResults }, { headers: CORS });
+        const data = await geminiResp.json();
+        const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+
+        let parsed;
+        try {
+            parsed = JSON.parse(raw);
+        } catch {
+            // Best-effort: pull the first JSON array out of the text
+            const m = raw.match(/\[[\s\S]*\]/);
+            parsed = m ? JSON.parse(m[0]) : null;
+        }
+
+        if (!Array.isArray(parsed)) {
+            return Response.json(
+                { error: 'Gemini returned unparseable output' },
+                { status: 502, headers: CORS }
+            );
+        }
+
+        const validIndices = new Set(dialogueIndices);
+        const speakers = [];
+        for (const item of parsed) {
+            const idx = typeof item.index === 'number' ? item.index : Number(item.index);
+            if (!Number.isInteger(idx) || !validIndices.has(idx)) continue;
+
+            let speaker = item.speaker ? normalizeName(item.speaker) : null;
+            if (speaker && isNonCharacterName(speaker)) speaker = null;
+
+            const gender = ['male', 'female'].includes(item.gender) ? item.gender : 'unknown';
+            speakers.push({ index: idx, speaker, gender });
+        }
+
+        return Response.json({ speakers }, { headers: CORS });
 
     } catch (err) {
         console.error('[AI] analyze-dialogue error:', err);
