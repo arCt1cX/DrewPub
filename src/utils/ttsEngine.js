@@ -2,7 +2,7 @@
  * ttsEngine.js
  *
  * TTS engine factory — two engines:
- *   • cloud  — Microsoft Edge Neural Voices via /api/tts server endpoint
+ *   • cloud  — Kokoro neural voices via /api/tts server endpoint
  *   • system — Web Speech API (offline fallback)
  *
  * Each engine implements: init(), speak(), stop(), pause(), resume(),
@@ -12,18 +12,19 @@
 // ── Voice Presets ─────────────────────────────────────────
 
 export const VOICE_PRESETS = {
+    // Kokoro-TTS voices (served by the Kokoro FastAPI Space via /api/tts).
     cloud: {
-        narrator:   { id: 'en-US-GuyNeural',           gender: 'male',   label: 'Guy (Narrator)' },
-        male1:      { id: 'en-US-DavisNeural',         gender: 'male',   label: 'Davis' },
-        male2:      { id: 'en-US-ChristopherNeural',   gender: 'male',   label: 'Christopher' },
-        male3:      { id: 'en-GB-RyanNeural',          gender: 'male',   label: 'Ryan (British)' },
-        male4:      { id: 'en-US-EricNeural',          gender: 'male',   label: 'Eric' },
-        male5:      { id: 'en-US-RogerNeural',         gender: 'male',   label: 'Roger' },
-        female1:    { id: 'en-US-AriaNeural',          gender: 'female', label: 'Aria' },
-        female2:    { id: 'en-US-JennyNeural',         gender: 'female', label: 'Jenny' },
-        female3:    { id: 'en-US-MichelleNeural',      gender: 'female', label: 'Michelle' },
-        female4:    { id: 'en-GB-SoniaNeural',         gender: 'female', label: 'Sonia (British)' },
-        female5:    { id: 'en-US-SaraNeural',          gender: 'female', label: 'Sara' },
+        narrator:   { id: 'am_michael', gender: 'male',   label: 'Michael (Narrator)' },
+        male1:      { id: 'am_fenrir',  gender: 'male',   label: 'Fenrir' },
+        male2:      { id: 'am_adam',    gender: 'male',   label: 'Adam' },
+        male3:      { id: 'bm_george',  gender: 'male',   label: 'George (British)' },
+        male4:      { id: 'am_eric',    gender: 'male',   label: 'Eric' },
+        male5:      { id: 'am_liam',    gender: 'male',   label: 'Liam' },
+        female1:    { id: 'af_heart',   gender: 'female', label: 'Heart' },
+        female2:    { id: 'af_bella',   gender: 'female', label: 'Bella' },
+        female3:    { id: 'af_nicole',  gender: 'female', label: 'Nicole' },
+        female4:    { id: 'bf_emma',    gender: 'female', label: 'Emma (British)' },
+        female5:    { id: 'af_sarah',   gender: 'female', label: 'Sarah' },
     },
     system: {
         narrator:   { id: 'system-default', gender: 'male',   label: 'Default' },

@@ -270,7 +270,7 @@ export default function SettingsPanel({ onClose }) {
 
                         {(settings.ttsEngine || 'cloud') === 'cloud' && (
                             <div className="tts-info-note">
-                                Microsoft Edge Neural Voices — high quality, requires internet
+                                Kokoro neural voices — natural quality, requires internet
                             </div>
                         )}
 
