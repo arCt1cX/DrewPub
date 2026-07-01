@@ -59,9 +59,18 @@ export async function onRequestPost(context) {
             });
         }
 
+        // Quote marks carry no audio meaning but Kokoro tries to voice them —
+        // audible as a strange noise at the end of spoken dialogue lines.
+        // Strip double-quote-like chars (word-internal apostrophes are kept)
+        // and collapse the leftover whitespace.
+        const cleanText = text
+            .replace(/["“”„‟«»]/g, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+
         // Map to the Kokoro FastAPI request format
         const ttsBody = {
-            text: text.substring(0, 4096),
+            text: (cleanText || text.trim()).substring(0, 4096),
             voice: sanitizeVoice(voice),
             speed: Math.max(0.25, Math.min(4.0, rate || 1.0)),
             output_format: 'mp3',

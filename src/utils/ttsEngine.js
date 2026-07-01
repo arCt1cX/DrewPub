@@ -77,9 +77,13 @@ function createCloudEngine() {
     let resolvePlay = null;
 
     const prefetchCache = new Map();
+    const inFlight = new Map();       // key → Promise<Blob> (dedupe concurrent requests)
+    let fetchChain = Promise.resolve(); // serialize requests — the free CPU Space
+                                        // gains nothing from parallelism (measured:
+                                        // 2 concurrent = 2× slower each)
 
     function cacheKey(text, voice, rate, pitch) {
-        return `${voice}|${rate}|${pitch}|${text.substring(0, 100)}`;
+        return `${voice}|${rate}|${pitch}|${text.length}|${text.substring(0, 100)}`;
     }
 
     async function fetchAudio(text, voice, rate, pitch) {
@@ -93,6 +97,34 @@ function createCloudEngine() {
             throw new Error(`TTS API error ${resp.status}: ${err}`);
         }
         return resp.blob();
+    }
+
+    // Single entry point for audio: cache hit → instant; already being
+    // fetched → WAIT for that request (this was the big bug: speak() used to
+    // re-fetch a chunk the prefetcher was still generating, doubling load on
+    // the Space and causing 10-20s dead gaps); otherwise queue a new fetch.
+    function requestAudio(text, voice, rate, pitch) {
+        const key = cacheKey(text, voice, rate, pitch);
+        if (prefetchCache.has(key)) return Promise.resolve(prefetchCache.get(key));
+        if (inFlight.has(key)) return inFlight.get(key);
+
+        const p = new Promise((resolve, reject) => {
+            fetchChain = fetchChain.then(async () => {
+                try {
+                    const blob = await fetchAudio(text, voice, rate || 1.0, pitch || 1.0);
+                    prefetchCache.set(key, blob);
+                    while (prefetchCache.size > 8) {
+                        prefetchCache.delete(prefetchCache.keys().next().value);
+                    }
+                    resolve(blob);
+                } catch (e) {
+                    reject(e);
+                }
+            });
+        });
+        inFlight.set(key, p);
+        p.catch(() => {}).then(() => inFlight.delete(key));
+        return p;
     }
 
     return {
@@ -127,16 +159,7 @@ function createCloudEngine() {
 
         async speak(text, voice, rate, pitch) {
             aborted = false;
-            const key = cacheKey(text, voice, rate, pitch);
-            let audioBlob;
-
-            if (prefetchCache.has(key)) {
-                audioBlob = prefetchCache.get(key);
-                prefetchCache.delete(key);
-            } else {
-                audioBlob = await fetchAudio(text, voice, rate || 1.0, pitch || 1.0);
-            }
-
+            const audioBlob = await requestAudio(text, voice, rate, pitch);
             if (aborted) return;
 
             return new Promise((resolve, reject) => {
@@ -163,14 +186,8 @@ function createCloudEngine() {
         },
 
         async prefetch(text, voice, rate, pitch) {
-            const key = cacheKey(text, voice, rate, pitch);
-            if (prefetchCache.has(key)) return;
             try {
-                const blob = await fetchAudio(text, voice, rate || 1.0, pitch || 1.0);
-                prefetchCache.set(key, blob);
-                if (prefetchCache.size > 5) {
-                    prefetchCache.delete(prefetchCache.keys().next().value);
-                }
+                await requestAudio(text, voice, rate, pitch);
             } catch { /* best-effort */ }
         },
 
@@ -188,6 +205,7 @@ function createCloudEngine() {
             this.stop();
             if (currentObjectUrl) { URL.revokeObjectURL(currentObjectUrl); currentObjectUrl = null; }
             prefetchCache.clear();
+            inFlight.clear();
             audioEl = null;
             ready = false;
         },

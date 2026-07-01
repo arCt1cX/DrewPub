@@ -259,17 +259,20 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
     // request. Kokoro then renders natural pauses between the sentences instead
     // of a hard silent gap (separate audio clip) at every period — which is
     // what made playback feel choppy. Voice changes still start a new chunk.
-    const buildChunk = useCallback((startIndex) => {
+    // maxChars tuning (measured on the free CPU Space: generation ≈ 1.8×
+    // realtime): 450 chars ≈ 18s to generate, ≈ 32s of audio → the buffer
+    // grows while playing. Pass a small maxChars for the first chunk of a
+    // playback so speech starts fast.
+    const buildChunk = useCallback((startIndex, maxChars = 450) => {
         const segments = segmentsRef.current;
         const first = segments[startIndex];
         const voice = getVoiceForSegment(first, startIndex);
-        const MAX_CHARS = 600; // keep requests short enough for low latency
         let text = first.text;
         let end = startIndex;
 
         for (let j = startIndex + 1; j < segments.length; j++) {
             if (getVoiceForSegment(segments[j], j) !== voice) break;
-            if (text.length + segments[j].text.length + 1 > MAX_CHARS) break;
+            if (text.length + segments[j].text.length + 1 > maxChars) break;
             text += ' ' + segments[j].text;
             end = j;
         }
@@ -524,7 +527,9 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
             if (loopIdRef.current !== thisLoop) return;
             if (stoppedRef.current || !activeRef.current) break;
 
-            const chunk = buildChunk(i);
+            // First chunk of a playback = one sentence → speech starts after a
+            // few seconds instead of waiting for a long chunk to generate.
+            const chunk = buildChunk(i, i === startIndex ? 1 : 450);
             const rate = settingsRef.current.ttsRate || 1.0;
             const pitch = settingsRef.current.ttsPitch || 1.0;
 
@@ -595,6 +600,19 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
                         } else {
                             const rawSegments = createTtsSegments(blocks);
                             let parsed = parseDialogue(rawSegments);
+
+                            // Pre-generate the opening line while the AI runs
+                            // (same trick as startTts).
+                            if (parsed.segments[0] && parsed.segments[0].segType !== 'dialogue' && engineRef.current?.prefetch) {
+                                const engineType2 = settingsRef.current.ttsEngine || 'cloud';
+                                const presets2 = VOICE_PRESETS[engineType2] || VOICE_PRESETS.cloud;
+                                engineRef.current.prefetch(
+                                    parsed.segments[0].text,
+                                    settingsRef.current.ttsNarratorVoice || presets2.narrator.id,
+                                    settingsRef.current.ttsRate || 1.0,
+                                    settingsRef.current.ttsPitch || 1.0
+                                );
+                            }
 
                             // Same analysis pipeline as startTts — never play
                             // with raw regex speakers.
@@ -697,6 +715,22 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
                 const overrides = await getVoiceOverrides(bookId);
                 voiceOverridesRef.current = overrides;
             } catch { /* no overrides yet */ }
+
+            // ── Pre-generate the opening line WHILE the AI analyzes ──
+            // The first segment is almost always narration, whose voice doesn't
+            // depend on the analysis — so its audio can be synthesized in
+            // parallel with the Gemini call. By the time analysis finishes the
+            // first line is ready → near-instant start.
+            if (parsed.segments[0] && parsed.segments[0].segType !== 'dialogue' && engineRef.current?.prefetch) {
+                const presets = VOICE_PRESETS[engineType] || VOICE_PRESETS.cloud;
+                const narratorVoice = settingsRef.current.ttsNarratorVoice || presets.narrator.id;
+                engineRef.current.prefetch(
+                    parsed.segments[0].text,
+                    narratorVoice,
+                    settingsRef.current.ttsRate || 1.0,
+                    settingsRef.current.ttsPitch || 1.0
+                );
+            }
 
             // ── Analyze BEFORE playback (cache → AI) ──
             // Waiting a few seconds on a fresh chapter beats hearing wrong
