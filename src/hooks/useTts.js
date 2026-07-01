@@ -47,6 +47,16 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
 
     useEffect(() => { settingsRef.current = settings; }, [settings]);
 
+    // ── Wake the TTS Space early ────────────────────────────
+    // Free HF Spaces sleep after inactivity; cold start (container boot +
+    // model load) takes ~30-60s. Pinging when the reader opens means the
+    // Space is usually awake by the time the user presses play.
+    useEffect(() => {
+        if ((settingsRef.current.ttsEngine || 'cloud') === 'cloud') {
+            fetch('/api/tts?test=1').catch(() => { /* best-effort warm-up */ });
+        }
+    }, []);
+
     // ── Initialize / change engine ──────────────────────────
     const initEngine = useCallback(async (engineType) => {
         if (engineRef.current) {
@@ -345,33 +355,47 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
             const data = await resp.json();
             if (!data.speakers || !Array.isArray(data.speakers)) return parsed;
 
-            // Index the AI verdicts by segment index. The AI is authoritative:
-            // where it has an opinion we overwrite the regex result entirely.
+            // Index the AI verdicts by segment index. "NARRATOR" is a sentinel:
+            // "this line is narration, not dialogue" (fixes the heuristic's
+            // mis-tagged quotes that made a character voice bleed into narration).
             const verdict = new Map();
             for (const item of data.speakers) {
                 if (typeof item.index !== 'number') continue;
+                if (item.speaker === 'NARRATOR') {
+                    verdict.set(item.index, { narration: true });
+                    continue;
+                }
                 let name = item.speaker ? normalizeCharacterName(item.speaker) : null;
                 if (name && !isValidCharacterName(name)) name = null;
                 verdict.set(item.index, { speaker: name, gender: item.gender || 'unknown' });
             }
 
-            // Apply verdicts to segments, then rebuild the character map from the
-            // FINAL speakers so regex-invented ghosts disappear entirely.
+            // Apply verdicts — the AI is authoritative on BOTH segType and
+            // speaker. Then rebuild the character map from the FINAL speakers so
+            // regex-invented ghosts disappear entirely.
             const characters = {};
             const canonicalOf = {}; // lowercase → canonical casing
 
             for (let i = 0; i < parsed.segments.length; i++) {
                 const seg = parsed.segments[i];
-                if (seg.segType !== 'dialogue') continue;
+                const v = verdict.get(i);
 
-                if (verdict.has(i)) {
-                    const v = verdict.get(i);
-                    seg.speaker = v.speaker;
-                    seg.gender = v.speaker ? (v.gender !== 'unknown' ? v.gender : seg.gender) : null;
+                if (v) {
+                    if (v.narration) {
+                        // AI: this is narration, whatever the heuristic said
+                        seg.segType = 'narration';
+                        seg.speaker = null;
+                        seg.gender = null;
+                    } else {
+                        // AI: this is dialogue (possibly re-tagging narration)
+                        seg.segType = 'dialogue';
+                        seg.speaker = v.speaker;
+                        seg.gender = v.speaker ? (v.gender !== 'unknown' ? v.gender : seg.gender) : null;
+                    }
                 }
-                // (segments the AI didn't mention keep their regex speaker)
+                // (lines the AI didn't mention keep their heuristic state)
 
-                if (!seg.speaker) continue;
+                if (seg.segType !== 'dialogue' || !seg.speaker) continue;
 
                 const lower = seg.speaker.toLowerCase();
                 const canonical = canonicalOf[lower] || seg.speaker;
@@ -387,12 +411,66 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
 
             parsed.characters = characters;
             console.log(`[AI] ${Object.keys(characters).length} characters, ${verdict.size} lines resolved`);
+            parsed.aiOk = true;
             return parsed;
         } catch (err) {
-            console.warn('[AI] Enhancement failed (non-blocking):', err.message);
+            console.warn('[AI] Enhancement failed:', err.message);
             return parsed;
         }
     }, [bookId]);
+
+    // ── Full chapter analysis (cache → AI → fallback) ──────
+    // Speakers come ONLY from the cache or the AI. The regex parser's speaker
+    // guesses are stripped before playback ever uses them — they were the
+    // source of the random "Bitter"/"Night" voices. If both cache and AI are
+    // unavailable, dialogue plays with one generic dialogue voice (no wrong
+    // names, just less variety).
+    const analyzeChapter = useCallback(async (parsed, chapterKey) => {
+        // 1. Strip regex speaker guesses (keep segType — AI may correct it)
+        for (const seg of parsed.segments) {
+            if (seg.segType === 'dialogue') { seg.speaker = null; seg.gender = null; }
+        }
+        parsed.characters = {};
+
+        // 2. Cached AI analysis → instant, no API call
+        try {
+            const cached = await getDialogueAnalysis(bookId, chapterKey);
+            if (cached?.segments?.length) {
+                const n = Math.min(cached.segments.length, parsed.segments.length);
+                for (let i = 0; i < n; i++) {
+                    const cs = cached.segments[i];
+                    const ps = parsed.segments[i];
+                    if (cs.segType) ps.segType = cs.segType;
+                    ps.speaker = cs.speaker || null;
+                    ps.gender = cs.gender || null;
+                }
+                parsed.characters = cached.characters || {};
+                console.log('[TTS] Using cached AI analysis');
+                return parsed;
+            }
+        } catch { /* cache miss is fine */ }
+
+        // 3. Run the AI and WAIT for it — correctness over start latency
+        const enhanced = await enhanceWithAI(parsed);
+
+        // 4. Cache only real AI results (never the regex fallback)
+        if (enhanced.aiOk) {
+            try {
+                await saveDialogueAnalysis({
+                    id: `${bookId}-${chapterKey}`,
+                    bookId,
+                    chapterIndex: chapterKey,
+                    segments: enhanced.segments.map(s => ({
+                        segType: s.segType,
+                        speaker: s.speaker,
+                        gender: s.gender,
+                    })),
+                    characters: enhanced.characters,
+                });
+            } catch { /* ignore */ }
+        }
+        return enhanced;
+    }, [bookId, enhanceWithAI]);
 
     // ── Update a character's voice (from CharacterPanel) ────
     const updateCharacterVoice = useCallback(async (charName, voiceId, gender) => {
@@ -450,63 +528,21 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
             const rate = settingsRef.current.ttsRate || 1.0;
             const pitch = settingsRef.current.ttsPitch || 1.0;
 
-            // Prefetch the NEXT chunk (with its own voice) so voice changes
-            // don't stall waiting on a fresh request.
-            if (chunk.end + 1 < segmentsRef.current.length && engineRef.current?.prefetch) {
-                const next = buildChunk(chunk.end + 1);
-                engineRef.current.prefetch(next.text, next.voice, rate, pitch);
+            // Prefetch the next TWO chunks so slow Kokoro generation (free CPU
+            // Space runs near real-time) stays ahead of playback — this is what
+            // causes the occasional dead gaps between chunks.
+            if (engineRef.current?.prefetch) {
+                let pi = chunk.end + 1;
+                for (let p = 0; p < 2 && pi < segmentsRef.current.length; p++) {
+                    const next = buildChunk(pi);
+                    engineRef.current.prefetch(next.text, next.voice, rate, pitch);
+                    pi = next.end + 1;
+                }
             }
 
             setCurrentSegmentIndex(i);
             setCurrentSpeaker(chunk.speaker || 'Narrator');
             highlightSegment(i);
-
-            // ── Sentence-following highlight ──
-            // A chunk is one audio clip covering several sentences. We estimate
-            // each sentence's slice of the clip by its character length and
-            // advance the highlight as the audio plays (Kokoro gives no per-word
-            // timestamps, so this is a proportional estimate — good enough to
-            // follow along). Only the cloud engine exposes an <audio> element.
-            const chunkStart = i;
-            const chunkEnd = chunk.end;
-            const audioEl = audioElRef.current;
-            let stopFollow = () => {};
-            if (audioEl && chunkEnd > chunkStart) {
-                const lens = [];
-                let total = 0;
-                for (let k = chunkStart; k <= chunkEnd; k++) {
-                    const L = Math.max(1, (segmentsRef.current[k]?.text || '').length);
-                    lens.push(L);
-                    total += L;
-                }
-                const fracs = [];
-                let acc = 0;
-                for (const L of lens) { acc += L; fracs.push(acc / total); }
-
-                // Kokoro's mp3 often lacks a duration header → audioEl.duration
-                // is Infinity/NaN. Fall back to an estimate (~14 chars/sec at 1x,
-                // scaled by speed) so the highlight still advances. currentTime
-                // is always reliable, so we drive progress off that.
-                const estTotal = total / (14 * (settingsRef.current.ttsRate || 1.0));
-
-                let lastHi = chunkStart;
-                const onTime = () => {
-                    const d = audioEl.duration;
-                    const dur = (d && isFinite(d) && d > 0) ? d : estTotal;
-                    const p = audioEl.currentTime / dur;
-                    let k = 0;
-                    while (k < fracs.length - 1 && p >= fracs[k]) k++;
-                    const idx = chunkStart + k;
-                    if (idx !== lastHi) {
-                        lastHi = idx;
-                        setCurrentSegmentIndex(idx);
-                        setCurrentSpeaker(segmentsRef.current[idx]?.speaker || 'Narrator');
-                        highlightSegment(idx);
-                    }
-                };
-                audioEl.addEventListener('timeupdate', onTime);
-                stopFollow = () => audioEl.removeEventListener('timeupdate', onTime);
-            }
 
             let success;
             try {
@@ -515,8 +551,6 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
             } catch (err) {
                 success = false;
                 if (!stoppedRef.current) console.warn('TTS speak failed:', err);
-            } finally {
-                stopFollow();
             }
 
             // Check again after await — loop may have been superseded
@@ -560,15 +594,23 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
                             console.warn('[TTS] New chapter has no text, stopping');
                         } else {
                             const rawSegments = createTtsSegments(blocks);
-                            const parsed = parseDialogue(rawSegments);
+                            let parsed = parseDialogue(rawSegments);
+
+                            // Same analysis pipeline as startTts — never play
+                            // with raw regex speakers.
+                            const chapterHref = renditionRef.current?.location?.start?.href || '0';
+                            parsed = await analyzeChapter(parsed, chapterHref);
+
+                            if (loopIdRef.current !== thisLoop) return;
+                            if (stoppedRef.current || !activeRef.current) return;
 
                             segmentsRef.current = parsed.segments;
                             parsedDataRef.current = parsed;
                             setTotalSegments(parsed.segments.length);
+                            setCharacters({ ...parsed.characters });
 
-                            if (parsed.characters && Object.keys(parsed.characters).length > 0) {
-                                Object.assign(voiceAssignmentRef.current, buildVoiceAssignment(parsed.characters));
-                            }
+                            voiceAssignmentRef.current = buildVoiceAssignment(parsed.characters);
+                            setCharacterVoices({ ...voiceAssignmentRef.current });
 
                             playFromIndex(0);
                             return;
@@ -583,7 +625,7 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
             setCurrentSpeaker(null);
             clearHighlights();
         }
-    }, [buildChunk, highlightSegment, renditionRef, getIframeDoc, clearHighlights, buildVoiceAssignment]);
+    }, [buildChunk, highlightSegment, renditionRef, getIframeDoc, clearHighlights, buildVoiceAssignment, analyzeChapter]);
 
     // ── Public API ──────────────────────────────────────────
 
@@ -654,105 +696,40 @@ export default function useTts({ renditionRef, viewerRef, settings, bookId }) {
             try {
                 const overrides = await getVoiceOverrides(bookId);
                 voiceOverridesRef.current = overrides;
-                // Apply gender overrides from saved data
-                for (const [name, info] of Object.entries(overrides)) {
-                    if (parsed.characters[name] && info.gender) {
-                        parsed.characters[name].gender = info.gender;
-                    }
-                }
             } catch { /* no overrides yet */ }
 
-            // Try to use cached dialogue analysis for better voice assignments
-            try {
-                const chapterHref = renditionRef.current?.location?.start?.href || '0';
-                const cached = await getDialogueAnalysis(bookId, chapterHref);
-                if (cached?.characters) {
-                    for (const [name, info] of Object.entries(cached.characters)) {
-                        if (parsed.characters[name] && info.gender !== 'unknown') {
-                            parsed.characters[name].gender = info.gender;
-                        }
-                    }
-                    // Also restore speakers from cache for unattributed segments
-                    if (cached.segments) {
-                        for (let i = 0; i < Math.min(cached.segments.length, parsed.segments.length); i++) {
-                            const cs = cached.segments[i];
-                            const ps = parsed.segments[i];
-                            if (cs.speaker && !ps.speaker && ps.segType === 'dialogue') {
-                                ps.speaker = cs.speaker;
-                                ps.gender = cs.gender;
-                                if (!parsed.characters[cs.speaker]) {
-                                    parsed.characters[cs.speaker] = { gender: cs.gender || 'unknown', count: 0 };
-                                }
-                                parsed.characters[cs.speaker].count++;
-                            }
-                        }
-                    }
-                    for (const seg of parsed.segments) {
-                        if (seg.speaker && parsed.characters[seg.speaker]) {
-                            seg.gender = parsed.characters[seg.speaker].gender;
-                        }
-                    }
+            // ── Analyze BEFORE playback (cache → AI) ──
+            // Waiting a few seconds on a fresh chapter beats hearing wrong
+            // voices; cached chapters start instantly.
+            const chapterHref = renditionRef.current?.location?.start?.href || '0';
+            parsed = await analyzeChapter(parsed, chapterHref);
+
+            // Apply gender overrides on top of the analysis
+            for (const [name, info] of Object.entries(voiceOverridesRef.current)) {
+                if (parsed.characters[name] && info.gender) {
+                    parsed.characters[name].gender = info.gender;
                 }
-            } catch {
-                // Cache miss is fine
             }
 
-            // ── AI Enhancement (non-blocking — start playback, enhance in background) ──
             segmentsRef.current = parsed.segments;
             parsedDataRef.current = parsed;
             setTotalSegments(parsed.segments.length);
             setCharacters({ ...parsed.characters });
 
-            // Build initial voice assignments
-            if (parsed.characters && Object.keys(parsed.characters).length > 0) {
-                voiceAssignmentRef.current = buildVoiceAssignment(parsed.characters);
-                setCharacterVoices({ ...voiceAssignmentRef.current });
-            }
+            voiceAssignmentRef.current = buildVoiceAssignment(parsed.characters);
+            setCharacterVoices({ ...voiceAssignmentRef.current });
 
             setTtsActive(true);
             activeRef.current = true;
             setTtsLoading(false);
 
-            // Start playback immediately
             playFromIndex(0);
-
-            // Run AI in background to improve future chapters & enrich current data
-            enhanceWithAI(parsed).then(enhanced => {
-                if (!activeRef.current) return;
-
-                parsedDataRef.current = enhanced;
-                segmentsRef.current = enhanced.segments;
-
-                // Rebuild voice assignments with AI-improved data
-                if (enhanced.characters && Object.keys(enhanced.characters).length > 0) {
-                    voiceAssignmentRef.current = buildVoiceAssignment(enhanced.characters);
-                    setCharacters({ ...enhanced.characters });
-                    setCharacterVoices({ ...voiceAssignmentRef.current });
-                }
-
-                // Cache the AI-enhanced analysis
-                try {
-                    const chapterHref = renditionRef.current?.location?.start?.href || '0';
-                    saveDialogueAnalysis({
-                        id: `${bookId}-${chapterHref}`,
-                        bookId,
-                        chapterIndex: chapterHref,
-                        segments: enhanced.segments.map(s => ({
-                            text: s.text.substring(0, 100),
-                            segType: s.segType,
-                            speaker: s.speaker,
-                            gender: s.gender,
-                        })),
-                        characters: enhanced.characters,
-                    });
-                } catch { /* ignore */ }
-            });
 
         } catch (err) {
             console.error('TTS start failed:', err);
             setTtsLoading(false);
         }
-    }, [initEngine, getIframeDoc, buildVoiceAssignment, playFromIndex, bookId, renditionRef, enhanceWithAI]);
+    }, [initEngine, getIframeDoc, buildVoiceAssignment, playFromIndex, bookId, renditionRef, analyzeChapter]);
 
     const stopTts = useCallback(() => {
         stoppedRef.current = true;

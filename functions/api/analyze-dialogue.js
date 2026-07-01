@@ -81,20 +81,24 @@ function parseJsonArray(raw) {
 }
 
 function buildPrompt(transcript, dialogueIndices, knownList) {
-    return `You are a literary dialogue analyst. Below is a numbered transcript of one chapter of a novel. Each line is tagged NARRATION or DIALOGUE.
+    return `You are a literary dialogue analyst. Below is a numbered transcript of one chapter of a novel. Each line has a PROVISIONAL tag, NARRATION or DIALOGUE, produced by a crude heuristic — the tags may be WRONG and you should correct them.
 
 Known characters from earlier in this book (reuse these EXACT names when the speaker matches so voices stay consistent): ${knownList}
 
-Your task: for EACH DIALOGUE line, determine which character is speaking it.
+Your task: decide, for every line, whether it is actually spoken dialogue and if so WHO speaks it.
+
+Return one JSON element for:
+- every line tagged DIALOGUE (indices: [${dialogueIndices.join(', ')}]), AND
+- any line tagged NARRATION that is actually spoken dialogue (quote missed by the heuristic).
 
 Rules:
-- Only these DIALOGUE line indices need an answer: [${dialogueIndices.join(', ')}]
-- Use the character's real PROPER NAME with correct capitalization (e.g. "Regis", not "regis" or "REGIS"). If a known character above matches, reuse that exact spelling.
-- Track the conversation flow: use dialogue tags ("said X", "X asked"), surrounding narration, and turn-taking to decide who speaks.
-- A speaker MUST be a person/being who can talk. NEVER return: place names, objects, titles alone ("Lord", "Professor"), common words ("Whatever", "Nothing"), or narration.
-- If you genuinely cannot tell who speaks a line, set speaker to null. Do NOT guess a random word.
+- If a DIALOGUE-tagged line is actually narration (no spoken words — the heuristic mis-tagged it), return "speaker": "NARRATOR" for that index.
+- Otherwise "speaker" is the character's real PROPER NAME with correct capitalization (e.g. "Regis", not "regis" or "REGIS"). If a known character above matches, reuse that exact spelling.
+- Track the conversation flow: dialogue tags ("said X", "X asked"), surrounding narration, and turn-taking.
+- A speaker MUST be a person/being who can talk. NEVER return: place names, objects, titles alone ("Lord", "Professor"), common words ("Whatever", "Nothing", "Bitter", "Night").
+- If a line IS dialogue but you cannot tell who speaks it, set "speaker": null. Do NOT guess a random word.
 - Infer gender from pronouns/context: "male", "female", or "unknown".
-- Return ONLY a JSON array. Each element: {"index": <number>, "speaker": <name or null>, "gender": "male"|"female"|"unknown"}
+- Return ONLY a JSON array. Each element: {"index": <number>, "speaker": <name or "NARRATOR" or null>, "gender": "male"|"female"|"unknown"}
 
 Transcript:
 ${transcript}`;
@@ -211,14 +215,22 @@ export async function onRequestPost(context) {
             );
         }
 
-        const validIndices = new Set(dialogueIndices);
+        // The AI may answer for ANY line (it can re-tag narration↔dialogue),
+        // so accept any in-range index. "NARRATOR" is a sentinel meaning
+        // "this line is narration, not dialogue".
+        const maxIndex = segments.reduce((m, s) => Math.max(m, s.index ?? 0), 0);
         const speakers = [];
         for (const item of parsed) {
             const idx = typeof item.index === 'number' ? item.index : Number(item.index);
-            if (!Number.isInteger(idx) || !validIndices.has(idx)) continue;
+            if (!Number.isInteger(idx) || idx < 0 || idx > maxIndex) continue;
 
-            let speaker = item.speaker ? normalizeName(item.speaker) : null;
-            if (speaker && isNonCharacterName(speaker)) speaker = null;
+            let speaker;
+            if (item.speaker && String(item.speaker).trim().toLowerCase() === 'narrator') {
+                speaker = 'NARRATOR'; // sentinel — preserved verbatim
+            } else {
+                speaker = item.speaker ? normalizeName(item.speaker) : null;
+                if (speaker && isNonCharacterName(speaker)) speaker = null;
+            }
 
             const gender = ['male', 'female'].includes(item.gender) ? item.gender : 'unknown';
             speakers.push({ index: idx, speaker, gender });
