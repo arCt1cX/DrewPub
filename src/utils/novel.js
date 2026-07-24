@@ -1,11 +1,14 @@
 // Web-novel support: fetch a serialized novel from a supported source,
 // assemble it into a valid EPUB, and sync new chapters incrementally.
 //
-// Currently supports novelight.net. The flow is orchestrated client-side so
-// each network hop is a single Cloudflare Function subrequest (the functions
-// can't loop over thousands of chapters within one invocation).
+// Supports novelight.net and freewebnovel.com. The source is detected from the
+// pasted URL and stored on the book, so syncing keeps using the right one; the
+// per-source scraping lives in the /api/novel-* functions, which normalise both
+// to the same {id, num, title} chapter shape. The flow is orchestrated
+// client-side so each network hop is a single Cloudflare Function subrequest
+// (the functions can't loop over thousands of chapters within one invocation).
 //
-// Rate limiting (novelight 429s the Cloudflare egress IP when hit hard):
+// Rate limiting (the sources 429 the Cloudflare egress IP when hit hard):
 //   - The chapter LIST is cached on the book, so resume/sync never re-walk all
 //     ~60 pages — that burst was what heated the IP before the text phase.
 //   - Text fetches run one-at-a-time with an ADAPTIVE gap: it widens on 429 and
@@ -52,9 +55,10 @@ export async function importNovel(url, { onProgress, onCheckpoint } = {}) {
 
     report('Fetching novel info…');
     const meta = await fetchMeta(url);
+    meta.source = meta.source || novelSource(url) || DEFAULT_SOURCE;
 
     report('Listing chapters…');
-    const list = await fetchFullList(meta.sourceBookId, report);
+    const list = await fetchFullList(meta.source, meta.sourceBookId, report);
     if (list.length === 0) throw new Error('No chapters found for this novel');
 
     const bookId = generateId();
@@ -71,6 +75,8 @@ export async function importNovel(url, { onProgress, onCheckpoint } = {}) {
 export async function syncNovel(book, { onProgress, onCheckpoint } = {}) {
     const report = onProgress || (() => {});
     if (book.sourceType !== 'webnovel') throw new Error('Not a web novel');
+    // Books imported before multi-source support predate the `source` field.
+    const source = book.source || novelSource(book.sourceUrl) || DEFAULT_SOURCE;
 
     // Repair mode: older imports stored some chapters with no number (decimal /
     // titleless entries that failed the old parser). Re-list fully to fix them.
@@ -81,11 +87,11 @@ export async function syncNovel(book, { onProgress, onCheckpoint } = {}) {
     let list = Array.isArray(book.chapterList) ? book.chapterList.slice() : [];
     if (list.length === 0 || needsRepair) {
         report('Listing chapters…');
-        list = await fetchFullList(book.sourceBookId, report);
+        list = await fetchFullList(source, book.sourceBookId, report);
     } else {
         report('Checking for new chapters…');
         const known = new Set(list.map(c => c.id));
-        const fresh = await fetchNewChapters(book.sourceBookId, known, report);
+        const fresh = await fetchNewChapters(source, book.sourceBookId, known, report);
         if (fresh.length) {
             list = [...list, ...fresh];
             list.sort((a, b) => (a.num ?? 0) - (b.num ?? 0));
@@ -95,7 +101,7 @@ export async function syncNovel(book, { onProgress, onCheckpoint } = {}) {
     const before = (await getNovelChapters(book.id)).length;
     const meta = {
         title: book.title, author: book.author, cover: book.cover,
-        sourceUrl: book.sourceUrl, sourceBookId: book.sourceBookId,
+        sourceUrl: book.sourceUrl, sourceBookId: book.sourceBookId, source,
     };
     const result = await downloadInto({ bookId: book.id, meta, list, base: book, report, onCheckpoint });
     const added = result.fetched - before;
@@ -149,7 +155,7 @@ async function downloadInto({ bookId, meta, list, base, report, onCheckpoint }) 
     };
 
     report(`Downloading chapters (0/${targets.length})…`);
-    const { aborted } = await fetchTexts(targets, bookId, {
+    const { aborted } = await fetchTexts(meta.source || DEFAULT_SOURCE, targets, bookId, {
         reuse,
         checkpoint,
         onCount: (done) => report(`Downloading chapters (${done}/${targets.length})…`),
@@ -209,6 +215,7 @@ function makeBookRecord({ id, meta, list, fetched, aborted, data, base }) {
         data,
         lastReadAt: base.lastReadAt || Date.now(),
         sourceType: 'webnovel',
+        source: meta.source || DEFAULT_SOURCE,
         sourceUrl: meta.sourceUrl,
         sourceBookId: meta.sourceBookId,
         chapterList: list,                       // cached id/num/title — avoids re-listing
@@ -289,12 +296,13 @@ async function fetchMeta(url) {
     return data;
 }
 
-async function listPage(sourceBookId, page) {
-    const { data, status } = await apiGet(`/api/novel-list?bookId=${sourceBookId}&page=${page}`);
+async function listPage(source, sourceBookId, page) {
+    const path = `/api/novel-list?source=${source}&bookId=${encodeURIComponent(sourceBookId)}&page=${page}`;
+    const { data, status } = await apiGet(path);
     if (status === 429 || status === 503 || status >= 500) {
         // Listing rarely trips this; a short wait usually clears it.
         await sleep(jitter(4000));
-        const retry = await apiGet(`/api/novel-list?bookId=${sourceBookId}&page=${page}`);
+        const retry = await apiGet(path);
         if (!retry.data || retry.data.error) throw new Error(retry.data?.error || `Chapter list error ${retry.status}`);
         return retry.data.chapters || [];
     }
@@ -303,11 +311,11 @@ async function listPage(sourceBookId, page) {
 }
 
 // Walk every page (newest-first) until no new ids appear; return ascending order.
-async function fetchFullList(sourceBookId, report) {
+async function fetchFullList(source, sourceBookId, report) {
     const seen = new Set();
     const collected = [];
     for (let page = 1; page <= MAX_LIST_PAGES; page++) {
-        const chapters = await listPage(sourceBookId, page);
+        const chapters = await listPage(source, sourceBookId, page);
         if (chapters.length === 0) break;
         let added = 0;
         for (const ch of chapters) {
@@ -326,10 +334,10 @@ async function fetchFullList(sourceBookId, report) {
 }
 
 // Scan newest pages only, stopping once a page contains an already-known id.
-async function fetchNewChapters(sourceBookId, knownIds, report) {
+async function fetchNewChapters(source, sourceBookId, knownIds, report) {
     const found = [];
     for (let page = 1; page <= MAX_LIST_PAGES; page++) {
-        const chapters = await listPage(sourceBookId, page);
+        const chapters = await listPage(source, sourceBookId, page);
         if (chapters.length === 0) break;
         const novel = chapters.filter(c => !knownIds.has(c.id));
         found.push(...novel);
@@ -343,7 +351,7 @@ async function fetchNewChapters(sourceBookId, knownIds, report) {
 // One-at-a-time text download with an adaptive inter-request gap. Persists each
 // chapter as it arrives and checkpoints periodically; stops (aborted) on a
 // sustained block, keeping progress. Reuses already-downloaded text for free.
-async function fetchTexts(targets, bookId, { reuse, checkpoint, onCount } = {}) {
+async function fetchTexts(source, targets, bookId, { reuse, checkpoint, onCount } = {}) {
     let gap = GAP_START;
     let consecutiveBlocks = 0;
     let done = 0;
@@ -371,7 +379,7 @@ async function fetchTexts(targets, bookId, { reuse, checkpoint, onCount } = {}) 
             await sleep(gap);
             let result;
             try {
-                result = await apiGet(`/api/novel-chapter?id=${ch.id}`);
+                result = await apiGet(`/api/novel-chapter?source=${source}&id=${encodeURIComponent(ch.id)}`);
             } catch {
                 result = { status: 0, ok: false, data: null };
             }
@@ -521,10 +529,26 @@ function slug(s) {
     return String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'novel';
 }
 
-export function isNovelUrl(url) {
+// ─── Sources ────────────────────────────────────────
+
+// Books imported before freewebnovel support carry no `source` field.
+const DEFAULT_SOURCE = 'novelight';
+
+const SOURCE_HOSTS = [
+    ['novelight', /(^|\.)novelight\.net$/i],
+    ['freewebnovel', /(^|\.)freewebnovel\.(com|net|me|so|cc|org)$/i],
+];
+
+/** Which supported source a URL belongs to, or null if it isn't one of ours. */
+export function novelSource(url) {
     try {
-        return new URL(url).hostname.endsWith('novelight.net');
+        const { hostname } = new URL(url);
+        return SOURCE_HOSTS.find(([, re]) => re.test(hostname))?.[0] || null;
     } catch {
-        return false;
+        return null;
     }
+}
+
+export function isNovelUrl(url) {
+    return novelSource(url) !== null;
 }

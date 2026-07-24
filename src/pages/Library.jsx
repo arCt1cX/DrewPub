@@ -316,7 +316,7 @@ export default function Library() {
                         ref={searchInputRef}
                         type="text"
                         className="search-input"
-                        placeholder="Search OceanOfPDF, or paste a novelight.net link..."
+                        placeholder="Search OceanOfPDF, or paste a novelight.net / freewebnovel.com link..."
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
                         onKeyDown={handleSearchKeyDown}
