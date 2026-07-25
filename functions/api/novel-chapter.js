@@ -131,18 +131,24 @@ function cleanFreewebnovel(html) {
     return parts.join('\n');
 }
 
-// freewebnovel puts its chapter heading and its "read this on <site>" notices in
-// fully-bolded paragraphs. Drop a paragraph when the bold text IS the whole
-// paragraph (so bold inside real prose survives), or when a short paragraph
-// carries a source/mirror plug.
+// freewebnovel prefixes chapters with a heading paragraph and sprinkles in
+// "read this on <site>" plugs. Both are short, so we match them by content.
+//
+// NOTE: we do NOT drop fully-bolded paragraphs. That rule looked like it would
+// catch the heading, but on this source the heading is an <h4> (never a <p>),
+// while bracketed system messages — "[Function: Organic Evolution unlocked!]",
+// stat blocks, skill unlocks — ARE fully bolded and are real prose. It was
+// silently deleting ~14% of the paragraphs in LitRPG-style novels.
 const FWN_PLUG = /(freewebnovel|free\s?web\s?novel|libread|novel(?:bin|full|usb|hall|next)|read\s+(?:the\s+)?(?:latest|more)\s+chapters?\s+(?:at|on)|updated?\s+(?:by|from)\s+\w+\.(?:com|net|org)|visit\s+\S+\.(?:com|net|org)|new\s+novel\s+chapters?\s+are\s+published)/i;
+
+// A bare "Chapter 12" / "Chapter 12 - Title" line duplicating the EPUB's own heading.
+const FWN_HEADING = /^chapter\s*[\d.]+\s*(?:[:.\-–—]\s*.{0,80})?$/i;
 
 function isBoilerplate(inner) {
     const text = inner.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
     if (!text) return true;
 
-    const bold = inner.match(/<(?:strong|b)\b[^>]*>([\s\S]*?)<\/(?:strong|b)>/i);
-    if (bold && bold[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim() === text) return true;
+    if (text.length < 100 && FWN_HEADING.test(text)) return true;
 
     return text.length < 250 && FWN_PLUG.test(text);
 }

@@ -70,62 +70,70 @@ function parseNovelightChapters(html) {
 
 // ─── freewebnovel ───────────────────────────────────
 
-// freewebnovel paginates its chapter list OLDEST first (page 1 = chapter 1),
-// the opposite of novelight. We invert the page number here — client page 1 is
-// the source's last page — so "check for new chapters" can keep scanning from
-// page 1 and stop as soon as it recognises a chapter, for either source.
+// freewebnovel has no standalone chapter-list pages — the list is served by an
+// ajax endpoint on the book page, OLDEST first (page 1 = chapter 1), the opposite
+// of novelight. We invert the page number here — client page 1 is the source's
+// last page — so "check for new chapters" can keep scanning from page 1 and stop
+// as soon as it recognises a chapter, for either source.
 //
-// The page count comes from the list page itself, so the first source page is
-// fetched once to discover it (and reused directly when it IS the target).
-async function freewebnovelList(slug, page) {
-    const first = await fwnFetchFirst(fwnListUrls(slug, 1));
-    if (!first.ok) return fwnListError(first.res);
+// The ajax response carries no total, so the book page is fetched first to read
+// the page count off its chapter-range selector: two subrequests per list page.
+const FWN_PAGE_SIZE = 200;       // the endpoint silently caps pageSize at 200
+const FWN_SELECT_SPAN = 40;      // chapters per <option> in the page selector
 
-    const total = fwnPageCount(first.html, slug);
+async function freewebnovelList(slug, page) {
+    const book = await fwnFetchFirst(fwnBookUrls(slug));
+    if (!book.ok) return fwnListError(book.res);
+
+    const total = fwnPageCount(book.html);
     const target = total - (page - 1);
     if (target < 1) return json({ chapters: [] }); // walked past the oldest page
 
-    let html = first.html;
-    if (target !== 1) {
-        const got = await fwnFetchFirst(fwnListUrls(slug, target));
-        if (!got.ok) return fwnListError(got.res);
-        html = got.html;
-    }
+    // Out-of-range pages clamp to the last one, so `target` must be exact —
+    // over-shooting would repeat the newest page and cut the walk short.
+    const listUrl = `${FWN_BASE}/novel/${slug}?ajax=chapters&page=${target}&pageSize=${FWN_PAGE_SIZE}`;
+    const res = await fetch(listUrl, {
+        headers: {
+            'User-Agent': UA,
+            'Accept': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest',
+            'Referer': `${FWN_BASE}/novel/${slug}`,
+        },
+    });
+    if (!res.ok) return fwnListError(res);
 
-    return json({ chapters: parseFreewebnovelChapters(html, slug) });
+    const data = await res.json().catch(() => null);
+    const listHtml = data && typeof data.html === 'string' ? data.html : '';
+
+    // The endpoint lists oldest first; hand pages back newest-first like novelight.
+    return json({ chapters: parseFreewebnovelChapters(listHtml, slug).reverse() });
 }
 
-// A missing list page means we ran off the end, not a failure — report it as an
-// empty page so the client stops walking instead of aborting the import.
+// A missing page means we ran off the end, not a failure — report it as an empty
+// page so the client stops walking instead of aborting the import.
 function fwnListError(res) {
     if (res && res.status === 404) return json({ chapters: [] });
     return upstreamError(res, 'Chapter list');
 }
 
-function fwnListUrls(slug, page) {
-    return [`${FWN_BASE}/${slug}/${page}.html`, `${FWN_BASE}/novel/${slug}/${page}`]
-        .concat(page === 1 ? [`${FWN_BASE}/${slug}.html`, `${FWN_BASE}/novel/${slug}`] : []);
+function fwnBookUrls(slug) {
+    return [`${FWN_BASE}/novel/${slug}`, `${FWN_BASE}/${slug}.html`];
 }
 
-// Number of chapter-list pages: the page selector's <option> count, cross-checked
-// against the highest /<slug>/<n>.html link on the page (in case the selector
-// isn't rendered).
-function fwnPageCount(html, slug) {
-    let total = 1;
-
+// How many pages the list spans at OUR page size. The book page's selector has
+// one <option> per FWN_SELECT_SPAN chapters, and ceil(ceil(n/40)/5) == ceil(n/200),
+// so the option count converts exactly — no chapter total needed. Falls back to
+// the latest-chapter number when the selector isn't rendered.
+function fwnPageCount(html) {
     const select = html.match(/<select[^>]*id=["']indexselect["'][^>]*>([\s\S]*?)<\/select>/i);
-    if (select) {
-        const options = select[1].match(/<option\b/gi);
-        if (options) total = options.length;
+    const options = select ? (select[1].match(/<option\b/gi) || []).length : 0;
+    if (options > 0) {
+        return Math.max(1, Math.ceil((options * FWN_SELECT_SPAN) / FWN_PAGE_SIZE));
     }
 
-    const linkRe = new RegExp('href="[^"]*\\/' + escapeRe(slug) + '\\/(\\d+)\\.html"', 'gi');
-    let m;
-    while ((m = linkRe.exec(html)) !== null) {
-        total = Math.max(total, parseInt(m[1], 10) || 1);
-    }
-
-    return total;
+    const latest = html.match(/property=["']og:novel:lastest_chapter_url["'][^>]*content=["'][^"']*\/chapter-(\d+)/i);
+    const count = latest ? parseInt(latest[1], 10) || 0 : 0;
+    return Math.max(1, Math.ceil(count / FWN_PAGE_SIZE));
 }
 
 function parseFreewebnovelChapters(html, slug) {

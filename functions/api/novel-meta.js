@@ -131,8 +131,10 @@ function fwnSlug(parsed) {
     return first;
 }
 
+// /novel/<slug> is the live layout; /<slug>.html is a legacy path kept as a
+// fallback (it 404s today, so trying it first wasted a subrequest on every import).
 function fwnBookUrls(slug) {
-    return [`${FWN_BASE}/${slug}.html`, `${FWN_BASE}/novel/${slug}`];
+    return [`${FWN_BASE}/novel/${slug}`, `${FWN_BASE}/${slug}.html`];
 }
 
 // Try each candidate URL and return the first that responds with HTML, so a
