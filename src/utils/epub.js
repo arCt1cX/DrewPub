@@ -33,7 +33,7 @@ export async function parseEpub(arrayBuffer) {
     };
 }
 
-function blobToDataURL(blob) {
+export function blobToDataURL(blob) {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => resolve(reader.result);

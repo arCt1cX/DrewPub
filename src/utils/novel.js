@@ -17,7 +17,7 @@
 //     chapters" resumes the rest. Imports are fully resumable.
 
 import JSZip from 'jszip';
-import { generateId } from './epub';
+import { generateId, blobToDataURL } from './epub';
 import {
     addBook,
     saveNovelChapter,
@@ -56,6 +56,7 @@ export async function importNovel(url, { onProgress, onCheckpoint } = {}) {
     report('Fetching novel info…');
     const meta = await fetchMeta(url);
     meta.source = meta.source || novelSource(url) || DEFAULT_SOURCE;
+    meta.cover = await localiseCover(meta.cover);
 
     report('Listing chapters…');
     const list = await fetchFullList(meta.source, meta.sourceBookId, report);
@@ -100,7 +101,10 @@ export async function syncNovel(book, { onProgress, onCheckpoint } = {}) {
 
     const before = (await getNovelChapters(book.id)).length;
     const meta = {
-        title: book.title, author: book.author, cover: book.cover,
+        title: book.title, author: book.author,
+        // Books imported before covers were stored locally still hold a source
+        // URL; syncing is a good moment to pull the bytes down for good.
+        cover: await localiseCover(book.cover),
         sourceUrl: book.sourceUrl, sourceBookId: book.sourceBookId, source,
     };
     const result = await downloadInto({ bookId: book.id, meta, list, base: book, report, onCheckpoint });
@@ -416,6 +420,34 @@ async function fetchTexts(source, targets, bookId, { reuse, checkpoint, onCount 
         }
     }
     return { aborted: false, done };
+}
+
+// ─── Cover ──────────────────────────────────────────
+
+const COVER_MAX_BYTES = 4 * 1024 * 1024;
+
+// Turn a source cover URL into a stored data URL. Hotlinked covers load only
+// when the source feels like serving them (referer checks, image rate limits,
+// being offline), so a book's cover flickered in and out between app restarts.
+// Uploaded EPUBs already store their cover this way.
+//
+// Best-effort: on any failure we keep the URL, so the cover can still show up
+// rather than being lost outright.
+async function localiseCover(cover) {
+    if (!cover || !/^https?:\/\//i.test(cover)) return cover || '';
+    try {
+        const res = await fetch(`/api/novel-cover?url=${encodeURIComponent(cover)}`);
+        if (!res.ok) {
+            console.warn('Cover download failed:', (await res.json().catch(() => null))?.error || res.status);
+            return cover;
+        }
+        const blob = await res.blob();
+        if (!blob.size || blob.size > COVER_MAX_BYTES || !/^image\//i.test(blob.type)) return cover;
+        return await blobToDataURL(blob);
+    } catch (err) {
+        console.warn('Cover download failed:', err.message);
+        return cover;
+    }
 }
 
 // ─── EPUB assembly ──────────────────────────────────
