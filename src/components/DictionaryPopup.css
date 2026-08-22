@@ -10,13 +10,21 @@
 .dict-popup {
     position: fixed;
     z-index: 210;
-    width: 220px;
+    display: flex;
+    flex-direction: column;
+    width: max-content;
+    min-width: 200px;
+    max-width: min(340px, calc(100vw - 24px));
     border-radius: 18px;
     background: var(--surface);
     box-shadow: 0 10px 30px rgba(40,30,20,0.15);
     border: 1px solid var(--border);
     overflow: hidden;
     animation: dictFadeIn 0.2s ease-out;
+}
+
+.dict-popup[data-placement="above"] {
+    animation-name: dictFadeInDown;
 }
 
 [data-theme-mode="dark"] .dict-popup {
@@ -34,7 +42,19 @@
     }
 }
 
+@keyframes dictFadeInDown {
+    from {
+        opacity: 0;
+        transform: translateY(-8px) scale(0.95);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
 .dict-header {
+    flex: 0 0 auto;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -43,6 +63,11 @@
 }
 
 .dict-word {
+    flex: 1 1 auto;
+    min-width: 0;
+    max-height: 4.5em;
+    overflow-y: auto;
+    overflow-wrap: anywhere;
     font-family: var(--font-serif);
     font-style: italic;
     font-weight: 400;
@@ -69,7 +94,12 @@
 }
 
 .dict-body {
+    flex: 1 1 auto;
+    min-height: 0;
     padding: 10px 14px 14px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
 }
 
 .dict-translation-wrap {
