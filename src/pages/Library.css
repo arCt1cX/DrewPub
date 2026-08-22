@@ -13,7 +13,8 @@
 
 .library-content {
     flex: 1;
-    padding: 24px 22px;
+    /* Room for the fixed bottom navigation. */
+    padding: 24px 22px calc(90px + var(--safe-bottom));
     overflow-y: auto;
 }
 
@@ -539,6 +540,12 @@
 @media (max-width: 500px) {
     .library-page {
         zoom: 0.72;
+    }
+
+    /* The 0.72 zoom above shrinks this padding as well, so it is scaled up to
+       still clear the (unzoomed) bottom navigation. */
+    .library-content {
+        padding: 20px 16px calc(122px + var(--safe-bottom) / 0.72);
     }
 
     .search-section {

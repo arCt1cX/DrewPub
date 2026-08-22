@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { IconClose, IconLanguages } from './Icons';
+import { IconClose, IconLanguages, IconStar } from './Icons';
 import './DictionaryPopup.css';
 
 const EDGE = 12;        // distanza minima dai bordi dello schermo
@@ -12,7 +12,7 @@ function readInset(name) {
     return Number.isFinite(px) ? px : 0;
 }
 
-export default function DictionaryPopup({ word, translation, loading, position, onClose }) {
+export default function DictionaryPopup({ word, translation, loading, position, saved, onToggleSave, onClose }) {
     const popupRef = useRef(null);
     const headerRef = useRef(null);
     const bodyRef = useRef(null);
@@ -139,9 +139,22 @@ export default function DictionaryPopup({ word, translation, loading, position, 
             >
                 <div className="dict-header" ref={headerRef}>
                     <span className="dict-word">{word}</span>
-                    <button className="dict-close" onClick={onClose} aria-label="Chiudi">
-                        <IconClose size={14} />
-                    </button>
+                    <div className="dict-header-actions">
+                        {onToggleSave && (
+                            <button
+                                className={`dict-action dict-save ${saved ? 'saved' : ''}`}
+                                onClick={onToggleSave}
+                                disabled={!translation}
+                                title={saved ? 'Remove from vocabulary' : 'Save to vocabulary'}
+                                aria-label={saved ? 'Remove from vocabulary' : 'Save to vocabulary'}
+                            >
+                                <IconStar size={15} />
+                            </button>
+                        )}
+                        <button className="dict-action dict-close" onClick={onClose} aria-label="Close">
+                            <IconClose size={14} />
+                        </button>
+                    </div>
                 </div>
                 <div className="dict-body" ref={bodyRef}>
                     {loading ? (

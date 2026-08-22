@@ -2,9 +2,10 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { deleteBook, updateBookMeta } from '../db';
 import { IconTrash, IconMore, IconMoreH, IconRefresh } from './Icons';
+import { formatDuration, estimateRemaining } from '../utils/format';
 import './BookCard.css';
 
-export default function BookCard({ book, viewMode, onDelete, onSync }) {
+export default function BookCard({ book, viewMode, onDelete, onSync, readingMs = 0 }) {
     const navigate = useNavigate();
     const [showMenu, setShowMenu] = useState(false);
     const [pressing, setPressing] = useState(false);
@@ -38,6 +39,12 @@ export default function BookCard({ book, viewMode, onDelete, onSync }) {
 
     const progress = book.progress || 0;
 
+    // "1h 20m read · ~2h left" — only once there is something real to report.
+    const remaining = estimateRemaining(readingMs, progress);
+    const timeLine = readingMs > 0
+        ? `${formatDuration(readingMs, { short: true })} read${remaining ? ` \u00b7 ~${formatDuration(remaining, { short: true })} left` : ''}`
+        : null;
+
     if (viewMode === 'list') {
         return (
             <div
@@ -64,6 +71,7 @@ export default function BookCard({ book, viewMode, onDelete, onSync }) {
                             <div className="book-progress-fill-list" style={{ width: `${progress}%` }} />
                         </div>
                     )}
+                    {timeLine && <p className="book-time-list">{timeLine}</p>}
                 </div>
                 <button
                     className="book-menu-btn"
@@ -119,6 +127,7 @@ export default function BookCard({ book, viewMode, onDelete, onSync }) {
             <div className="book-meta">
                 <h3 className="book-title">{book.title || 'Untitled'}</h3>
                 <p className="book-author">{book.author || 'Unknown Author'}</p>
+                {timeLine && <p className="book-time">{timeLine}</p>}
             </div>
             {showMenu && (
                 <div className="book-menu" onClick={e => e.stopPropagation()}>

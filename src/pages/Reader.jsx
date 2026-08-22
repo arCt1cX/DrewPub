@@ -1,7 +1,10 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import ePub from 'epubjs';
-import { getBook, savePosition, getPosition, updateBookMeta } from '../db';
+import {
+    getBook, savePosition, getPosition, updateBookMeta,
+    saveVocabEntry, deleteVocabEntry, getVocabEntry, vocabIdFor, addReadingTime,
+} from '../db';
 import { useSettings } from '../contexts/SettingsContext';
 import { FONTS, getTheme } from '../styles/themes';
 import ReaderControls from '../components/ReaderControls';
@@ -40,6 +43,8 @@ export default function Reader() {
     const [dictTranslation, setDictTranslation] = useState(null);
     const [dictLoading, setDictLoading] = useState(false);
     const [dictPosition, setDictPosition] = useState({ x: 0, y: 0 });
+    const [dictContext, setDictContext] = useState('');
+    const [dictSaved, setDictSaved] = useState(false);
     const longPressTimerRef = useRef(null);
 
     const controlsTimerRef = useRef(null);
@@ -47,6 +52,9 @@ export default function Reader() {
     const showSettingsRef = useRef(false);
     const showTocRef = useRef(false);
     const settingsRef = useRef(settings);
+    const currentCfiRef = useRef(null);
+    const bookMetaRef = useRef(null);
+    const activityRef = useRef(Date.now());
 
     // TTS hook
     const tts = useTts({ renditionRef, viewerRef, settings, bookId });
@@ -56,6 +64,8 @@ export default function Reader() {
     useEffect(() => { showSettingsRef.current = showSettings; }, [showSettings]);
     useEffect(() => { showTocRef.current = showToc; }, [showToc]);
     useEffect(() => { settingsRef.current = settings; }, [settings]);
+    useEffect(() => { currentCfiRef.current = currentCfi; }, [currentCfi]);
+    useEffect(() => { bookMetaRef.current = bookMeta; }, [bookMeta]);
 
     // ── Auto-hide controls ────────────────────────────────
     const scheduleHideControls = useCallback(() => {
@@ -98,11 +108,16 @@ export default function Reader() {
     }
 
     // ── Translate word EN→IT ────────────────────────────────
-    const translateWord = useCallback(async (word, x, y) => {
+    const translateWord = useCallback(async (word, x, y, context = '') => {
         setDictWord(word);
         setDictTranslation(null);
         setDictLoading(true);
         setDictPosition({ x, y });
+        setDictContext(context);
+        // A word already in the vocabulary shows its star already filled.
+        getVocabEntry(vocabIdFor(bookId, word))
+            .then((entry) => setDictSaved(!!entry))
+            .catch(() => setDictSaved(false));
         try {
             const resp = await fetch(
                 `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=it&dt=t&q=${encodeURIComponent(word)}`
@@ -119,12 +134,38 @@ export default function Reader() {
         } finally {
             setDictLoading(false);
         }
-    }, []);
+    }, [bookId]);
 
     const closeDictionary = useCallback(() => {
         setDictWord(null);
         setDictTranslation(null);
+        setDictContext('');
+        setDictSaved(false);
     }, []);
+
+    // ── Save a lookup to the vocabulary ─────────────────────
+    const toggleSaveWord = useCallback(async () => {
+        if (!dictWord || !dictTranslation) return;
+        const id = vocabIdFor(bookId, dictWord);
+        try {
+            if (dictSaved) {
+                await deleteVocabEntry(id);
+                setDictSaved(false);
+            } else {
+                await saveVocabEntry({
+                    bookId,
+                    bookTitle: bookMetaRef.current?.title || '',
+                    text: dictWord,
+                    translation: dictTranslation,
+                    context: dictContext,
+                    cfi: currentCfiRef.current,
+                });
+                setDictSaved(true);
+            }
+        } catch (e) {
+            console.error('Failed to update vocabulary:', e);
+        }
+    }, [bookId, dictWord, dictTranslation, dictContext, dictSaved]);
 
     // ── Attach events to rendition ────────────────────────
     const attachRenditionEvents = useCallback((rendition) => {
@@ -256,6 +297,7 @@ export default function Reader() {
 
         setProgress(progressPct);
         setCurrentPage(p);
+        activityRef.current = Date.now();
         savePosition(bookId, cfi, progressPct);
         updateBookMeta(bookId, { progress: progressPct, lastReadAt: Date.now() });
         
@@ -279,6 +321,60 @@ export default function Reader() {
                 }
             }
         }
+    }, [bookId]);
+
+    // ── Reading time ──────────────────────────────────────
+    // Counted in short slices while the reader is on screen and the book is
+    // actually being read, so a book left open on the table adds nothing.
+    const ttsPlayingRef = useRef(false);
+    useEffect(() => { ttsPlayingRef.current = tts.ttsPlaying; }, [tts.ttsPlaying]);
+
+    useEffect(() => {
+        if (!bookId) return;
+
+        const TICK_MS = 20000;
+        const IDLE_MS = 3 * 60 * 1000;
+        let last = Date.now();
+        let paused = document.visibilityState !== 'visible';
+
+        const bump = () => { activityRef.current = Date.now(); };
+
+        const accumulate = () => {
+            const now = Date.now();
+            const delta = now - last;
+            last = now;
+            if (paused) return;
+            // Untouched for minutes and not listening: not reading.
+            if (!ttsPlayingRef.current && now - activityRef.current > IDLE_MS) return;
+            // A delta far bigger than a tick means the device slept.
+            if (delta > 0 && delta < TICK_MS * 3) addReadingTime(bookId, delta);
+        };
+
+        const onVisibility = () => {
+            if (document.visibilityState === 'visible') {
+                last = Date.now();
+                paused = false;
+                bump();
+            } else {
+                accumulate();
+                paused = true;
+            }
+        };
+
+        const timer = setInterval(accumulate, TICK_MS);
+        document.addEventListener('visibilitychange', onVisibility);
+        window.addEventListener('pointerdown', bump, { passive: true });
+        window.addEventListener('keydown', bump);
+        window.addEventListener('touchstart', bump, { passive: true });
+
+        return () => {
+            accumulate();
+            clearInterval(timer);
+            document.removeEventListener('visibilitychange', onVisibility);
+            window.removeEventListener('pointerdown', bump);
+            window.removeEventListener('keydown', bump);
+            window.removeEventListener('touchstart', bump);
+        };
     }, [bookId]);
 
     // ── Rendition options ─────────────────────────────────
@@ -317,10 +413,20 @@ export default function Reader() {
                 const navigation = await book.loaded.navigation;
                 setToc(navigation.toc || []);
 
-                const savedPos = await getPosition(bookId);
-                if (savedPos?.cfi) {
-                    await rendition.display(savedPos.cfi);
-                } else {
+                // ?cfi=… opens the book where a saved word was found; without
+                // it the reader resumes from the stored position as usual.
+                const jumpCfi = new URLSearchParams(window.location.search).get('cfi');
+                const savedPos = jumpCfi ? null : await getPosition(bookId);
+                try {
+                    if (jumpCfi) {
+                        await rendition.display(jumpCfi);
+                    } else if (savedPos?.cfi) {
+                        await rendition.display(savedPos.cfi);
+                    } else {
+                        await rendition.display();
+                    }
+                } catch (e) {
+                    console.warn('Could not open at the requested position:', e);
                     await rendition.display();
                 }
 
@@ -547,20 +653,24 @@ export default function Reader() {
             if (range && range.startContainer && range.startContainer.nodeType === Node.TEXT_NODE) {
                 const text = range.startContainer.textContent;
                 const offset = range.startOffset;
-                let start = offset, end = offset;
+
+                // Sentence around the touch point — the lookup itself in
+                // sentence mode, the saved context in word mode.
+                let sStart = offset, sEnd = offset;
+                while (sStart > 0 && !/[.!?\n]/.test(text[sStart - 1])) sStart--;
+                while (sEnd < text.length && !/[.!?\n]/.test(text[sEnd])) sEnd++;
+                if (sEnd < text.length) sEnd++; // keep the closing punctuation
+                const sentence = text.substring(sStart, sEnd).trim();
 
                 if (settingsRef.current.dictionaryMode === 'sentence') {
-                    // Expand to sentence boundaries (. ! ? or newline)
-                    while (start > 0 && !/[.!?\n]/.test(text[start - 1])) start--;
-                    while (end < text.length && !/[.!?\n]/.test(text[end])) end++;
-                    const sentence = text.substring(start, end).trim();
-                    if (sentence.length >= 2) return sentence;
+                    if (sentence.length >= 2) return { text: sentence, context: sentence };
                 } else {
                     // Expand to word boundaries
+                    let start = offset, end = offset;
                     while (start > 0 && /[a-zA-Z']/.test(text[start - 1])) start--;
                     while (end < text.length && /[a-zA-Z']/.test(text[end])) end++;
                     const word = text.substring(start, end).replace(/'/g, '').trim();
-                    if (word.length >= 2) return word;
+                    if (word.length >= 2) return { text: word, context: sentence };
                 }
             }
         } catch (_) { /* ignore */ }
@@ -596,9 +706,9 @@ export default function Reader() {
                 if (overlayTouchRef.current) {
                     overlayTouchRef.current.longPressTriggered = true;
                 }
-                const text = getTextAtPoint(sx, sy);
-                if (text) {
-                    translateWord(text, sx, sy);
+                const hit = getTextAtPoint(sx, sy);
+                if (hit) {
+                    translateWord(hit.text, sx, sy, hit.context);
                 }
             }, 500);
         }
@@ -730,9 +840,9 @@ export default function Reader() {
             if (mouseLPRef.current) {
                 mouseLPRef.current.triggered = true;
             }
-            const text = getTextAtPoint(sx, sy);
-            if (text) {
-                translateWord(text, sx, sy);
+            const hit = getTextAtPoint(sx, sy);
+            if (hit) {
+                translateWord(hit.text, sx, sy, hit.context);
             }
         }, 500);
     }, [getTextAtPoint, translateWord]);
@@ -853,6 +963,8 @@ export default function Reader() {
                     translation={dictTranslation}
                     loading={dictLoading}
                     position={dictPosition}
+                    saved={dictSaved}
+                    onToggleSave={toggleSaveWord}
                     onClose={closeDictionary}
                 />
             )}

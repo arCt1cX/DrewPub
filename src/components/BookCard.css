@@ -150,6 +150,24 @@
     font-weight: 500;
 }
 
+.book-time {
+    margin-top: 2px;
+    font-size: 0.66rem;
+    color: var(--text-softer);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.book-time-list {
+    margin-top: 4px;
+    font-size: 0.7rem;
+    color: var(--text-softer);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 /* ─── Context Menu ───────────────────────────────────── */
 
 .book-menu {

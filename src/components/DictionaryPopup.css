@@ -75,7 +75,14 @@
     color: var(--text);
 }
 
-.dict-close {
+.dict-header-actions {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.dict-action {
     background: none;
     border: none;
     color: var(--text-secondary);
@@ -88,9 +95,27 @@
     transition: all var(--transition-fast);
 }
 
-.dict-close:hover {
+.dict-action:hover {
     background: var(--surface-warm);
     color: var(--text);
+}
+
+.dict-action:disabled {
+    opacity: 0.35;
+    cursor: default;
+}
+
+.dict-action:disabled:hover {
+    background: none;
+    color: var(--text-secondary);
+}
+
+.dict-save.saved {
+    color: var(--accent-secondary);
+}
+
+.dict-save.saved svg {
+    fill: currentColor;
 }
 
 .dict-body {

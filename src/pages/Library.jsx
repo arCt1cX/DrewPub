@@ -3,7 +3,7 @@ import Header from '../components/Header';
 import BookCard from '../components/BookCard';
 import SettingsPanel from '../components/SettingsPanel';
 import { IconSearch, IconClose, IconDownload, IconArrowLeft, IconArrowRight, IconPlus, IconBookOpen } from '../components/Icons';
-import { getAllBooks, addBook } from '../db';
+import { getAllBooks, addBook, getReadingTimeByBook } from '../db';
 import { parseEpub, generateId } from '../utils/epub';
 import { importNovel, syncNovel, isNovelUrl } from '../utils/novel';
 import { useSettings } from '../contexts/SettingsContext';
@@ -12,6 +12,7 @@ import './Library.css';
 export default function Library() {
     const { settings, updateSetting } = useSettings();
     const [books, setBooks] = useState([]);
+    const [readingTimes, setReadingTimes] = useState({});
     const [loading, setLoading] = useState(true);
     const [uploading, setUploading] = useState(false);
     const [dragOver, setDragOver] = useState(false);
@@ -31,8 +32,9 @@ export default function Library() {
 
     const loadBooks = useCallback(async () => {
         try {
-            const allBooks = await getAllBooks();
+            const [allBooks, times] = await Promise.all([getAllBooks(), getReadingTimeByBook()]);
             setBooks(allBooks);
+            setReadingTimes(times);
         } catch (e) {
             console.error('Failed to load books:', e);
         } finally {
@@ -498,6 +500,7 @@ export default function Library() {
                                 viewMode={settings.libraryView}
                                 onDelete={handleDeleteBook}
                                 onSync={handleSyncBook}
+                                readingMs={readingTimes[book.id] ?? 0}
                             />
                         ))}
                     </div>

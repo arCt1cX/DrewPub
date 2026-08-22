@@ -1,7 +1,7 @@
 import { openDB } from 'idb';
 
 const DB_NAME = 'drewpub-db';
-const DB_VERSION = 5;
+const DB_VERSION = 6;
 
 let dbPromise;
 
@@ -48,6 +48,17 @@ function getDB() {
                 // (which exhausted memory on mobile once several big books existed).
                 if (!db.objectStoreNames.contains('bookData')) {
                     db.createObjectStore('bookData', { keyPath: 'id' });
+                }
+                // v6: Saved vocabulary + per-day reading time.
+                if (!db.objectStoreNames.contains('vocabulary')) {
+                    const vocabStore = db.createObjectStore('vocabulary', { keyPath: 'id' });
+                    vocabStore.createIndex('bookId', 'bookId');
+                    vocabStore.createIndex('createdAt', 'createdAt');
+                }
+                if (!db.objectStoreNames.contains('readingStats')) {
+                    const rsStore = db.createObjectStore('readingStats', { keyPath: 'id' });
+                    rsStore.createIndex('bookId', 'bookId');
+                    rsStore.createIndex('day', 'day');
                 }
                 if (oldVersion > 0 && oldVersion < 5) {
                     const books = tx.objectStore('books');
@@ -102,7 +113,7 @@ export async function getAllBooks() {
 
 export async function deleteBook(id) {
     const db = await getDB();
-    const tx = db.transaction(['books', 'bookData', 'positions', 'ttsCache', 'dialogueAnalysis', 'voiceOverrides', 'novelChapters'], 'readwrite');
+    const tx = db.transaction(['books', 'bookData', 'positions', 'ttsCache', 'dialogueAnalysis', 'voiceOverrides', 'novelChapters', 'vocabulary', 'readingStats'], 'readwrite');
 
     await Promise.all([
         tx.objectStore('books').delete(id),
@@ -139,7 +150,24 @@ export async function deleteBook(id) {
                 cursor = await cursor.continue();
             }
         })(),
-        tx.objectStore('voiceOverrides').delete(id)
+        tx.objectStore('voiceOverrides').delete(id),
+        // Saved words and reading time recorded for this book
+        (async () => {
+            const vStore = tx.objectStore('vocabulary');
+            let cursor = await vStore.index('bookId').openKeyCursor(IDBKeyRange.only(id));
+            while (cursor) {
+                await vStore.delete(cursor.primaryKey);
+                cursor = await cursor.continue();
+            }
+        })(),
+        (async () => {
+            const rStore = tx.objectStore('readingStats');
+            let cursor = await rStore.index('bookId').openKeyCursor(IDBKeyRange.only(id));
+            while (cursor) {
+                await rStore.delete(cursor.primaryKey);
+                cursor = await cursor.continue();
+            }
+        })()
     ]);
     
     await tx.done;
@@ -330,4 +358,108 @@ export async function pruneOrphanNovelChapters() {
     }
     await tx.done;
     return removed;
+}
+
+// ─── Vocabulary ─────────────────────────────────────
+// Words and sentences the reader explicitly saved from the translation popup,
+// each kept with the sentence it came from and the position in the book.
+
+// Same lookup in the same book always maps to the same record, so saving twice
+// updates instead of duplicating and the popup can tell whether it is saved.
+export function vocabIdFor(bookId, text) {
+    const norm = String(text || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    if (norm.length <= 80) return `${bookId}:${norm}`;
+    let hash = 0;
+    for (let i = 0; i < norm.length; i++) {
+        hash = (hash * 31 + norm.charCodeAt(i)) | 0;
+    }
+    return `${bookId}:${norm.slice(0, 80)}#${(hash >>> 0).toString(36)}`;
+}
+
+export async function saveVocabEntry(entry) {
+    // entry: { bookId, bookTitle, text, translation, context, cfi }
+    const db = await getDB();
+    const id = vocabIdFor(entry.bookId, entry.text);
+    const existing = await db.get('vocabulary', id);
+    const record = {
+        ...existing,
+        ...entry,
+        id,
+        createdAt: existing?.createdAt ?? Date.now(),
+        reviewCount: existing?.reviewCount ?? 0,
+        knownCount: existing?.knownCount ?? 0,
+        lastReviewedAt: existing?.lastReviewedAt ?? null,
+    };
+    await db.put('vocabulary', record);
+    return record;
+}
+
+export async function deleteVocabEntry(id) {
+    const db = await getDB();
+    return db.delete('vocabulary', id);
+}
+
+export async function getVocabEntry(id) {
+    const db = await getDB();
+    return db.get('vocabulary', id);
+}
+
+// Newest first — the order the vocabulary list shows by default.
+export async function getAllVocab() {
+    const db = await getDB();
+    const all = await db.getAll('vocabulary');
+    return all.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
+}
+
+export async function markVocabReviewed(id, known) {
+    const db = await getDB();
+    const entry = await db.get('vocabulary', id);
+    if (!entry) return;
+    entry.reviewCount = (entry.reviewCount ?? 0) + 1;
+    if (known) entry.knownCount = (entry.knownCount ?? 0) + 1;
+    entry.lastReviewedAt = Date.now();
+    return db.put('vocabulary', entry);
+}
+
+// ─── Reading Time ───────────────────────────────────
+// One record per book per day, so the stats page can chart days and rank books
+// without walking a log of individual sessions.
+
+export function dayKey(date = new Date()) {
+    const d = date instanceof Date ? date : new Date(date);
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${d.getFullYear()}-${m}-${day}`;
+}
+
+export async function addReadingTime(bookId, ms, when = Date.now()) {
+    if (!bookId || !(ms > 0)) return;
+    const db = await getDB();
+    const day = dayKey(when);
+    const id = `${day}:${bookId}`;
+    const tx = db.transaction('readingStats', 'readwrite');
+    const existing = await tx.store.get(id);
+    await tx.store.put({
+        id,
+        day,
+        bookId,
+        ms: (existing?.ms ?? 0) + ms,
+        updatedAt: Date.now(),
+    });
+    await tx.done;
+}
+
+export async function getAllReadingStats() {
+    const db = await getDB();
+    return db.getAll('readingStats');
+}
+
+// { [bookId]: totalMs } — used for the reading time shown on each book card.
+export async function getReadingTimeByBook() {
+    const all = await getAllReadingStats();
+    const totals = {};
+    for (const row of all) {
+        totals[row.bookId] = (totals[row.bookId] ?? 0) + (row.ms ?? 0);
+    }
+    return totals;
 }

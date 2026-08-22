@@ -62,3 +62,9 @@ export const IconRefresh = (p) => <Ic {...p}><path d="M3 12a9 9 0 0 1 15-6.7L21 
 export const IconSparkles = (p) => <Ic {...p}><path d="M12 3v4M10 5h4M5 10v4M3 12h4M18 14v3M16.5 15.5h3" /><path d="m12 10 1.6 3.4L17 15l-3.4 1.6L12 20l-1.6-3.4L7 15l3.4-1.6z" /></Ic>;
 export const IconMic = (p) => <Ic {...p}><rect x="9" y="2" width="6" height="11" rx="3" /><path d="M5 10a7 7 0 0 0 14 0M12 19v3" /></Ic>;
 export const IconBookmark = (p) => <Ic {...p}><path d="m19 21-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" /></Ic>;
+export const IconChart = (p) => <Ic {...p}><path d="M3 21h18" /><rect x="5" y="12" width="3.5" height="6" rx="1" /><rect x="10.25" y="8" width="3.5" height="10" rx="1" /><rect x="15.5" y="4" width="3.5" height="14" rx="1" /></Ic>;
+export const IconClock = (p) => <Ic {...p}><circle cx="12" cy="12" r="9" /><path d="M12 7v5.2l3.2 2" /></Ic>;
+export const IconFlame = (p) => <Ic {...p}><path d="M12 22a6 6 0 0 0 6-6c0-4-3-5-3-9-2.5 1.5-3 3.5-3 5-1-1-1.5-2-1.5-3.5C8 10 6 12.5 6 16a6 6 0 0 0 6 6z" /></Ic>;
+export const IconCards = (p) => <Ic {...p}><rect x="3" y="7" width="13" height="14" rx="2" /><path d="M8 4h9a3 3 0 0 1 3 3v10" /></Ic>;
+export const IconCalendar = (p) => <Ic {...p}><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M3 10h18M8 3v4M16 3v4" /></Ic>;
+export const IconEye = (p) => <Ic {...p}><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" /><circle cx="12" cy="12" r="2.5" /></Ic>;

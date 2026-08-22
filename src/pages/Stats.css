@@ -1,0 +1,210 @@
+/* ─── Statistics ─────────────────────────────────────── */
+
+.stats-content {
+    flex: 1;
+    padding: 8px 22px calc(90px + var(--safe-bottom));
+    overflow-y: auto;
+}
+
+.stats-tiles {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+}
+
+.stats-tile {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    padding: 14px 14px 12px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm);
+}
+
+.stats-tile-icon {
+    color: var(--accent);
+    margin-bottom: 4px;
+}
+
+.stats-tile-value {
+    font-family: var(--font-serif);
+    font-size: 1.5rem;
+    line-height: 1.1;
+    color: var(--text);
+}
+
+.stats-tile-label {
+    font-size: 0.68rem;
+    letter-spacing: 0.4px;
+    color: var(--text-secondary);
+}
+
+.stats-section {
+    margin-top: 26px;
+}
+
+.stats-section-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.stats-section-title {
+    font-family: var(--font-serif);
+    font-size: 1.15rem;
+    font-weight: 400;
+    color: var(--text);
+}
+
+.stats-section-note {
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    text-align: right;
+}
+
+/* Chart */
+
+.stats-chart {
+    display: flex;
+    align-items: flex-end;
+    gap: 6px;
+    height: 150px;
+    padding: 14px 14px 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm);
+}
+
+.stats-bar-col {
+    flex: 1 1 0;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+.stats-bar-track {
+    flex: 1 1 auto;
+    width: 100%;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+}
+
+.stats-bar {
+    width: 100%;
+    max-width: 22px;
+    border-radius: var(--radius-sm);
+    background: var(--border-strong);
+    transition: height var(--transition-normal);
+}
+
+.stats-bar.has-value {
+    background: var(--accent);
+}
+
+.stats-bar-label {
+    font-size: 0.6rem;
+    color: var(--text-softer);
+    text-transform: uppercase;
+}
+
+/* Per-book breakdown */
+
+.stats-books {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm);
+}
+
+.stats-book-row {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.stats-book-info {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.stats-book-title {
+    font-size: 0.85rem;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.stats-book-time {
+    flex: 0 0 auto;
+    font-size: 0.78rem;
+    color: var(--accent-secondary-deep);
+    font-weight: 600;
+}
+
+.stats-book-track {
+    height: 5px;
+    border-radius: var(--radius-pill);
+    background: var(--border);
+    overflow: hidden;
+}
+
+.stats-book-fill {
+    height: 100%;
+    border-radius: var(--radius-pill);
+    background: var(--accent);
+    transition: width var(--transition-normal);
+}
+
+.stats-book-progress {
+    font-size: 0.68rem;
+    color: var(--text-softer);
+}
+
+.stats-loading,
+.stats-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 60px 20px;
+    text-align: center;
+    color: var(--text-secondary);
+}
+
+@media (max-width: 500px) {
+    .stats-content {
+        padding: 8px 16px calc(86px + var(--safe-bottom));
+    }
+
+    .stats-tiles {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .stats-tile-value {
+        font-size: 1.35rem;
+    }
+
+    .stats-chart {
+        height: 130px;
+        gap: 4px;
+        padding: 12px 10px 8px;
+    }
+}
