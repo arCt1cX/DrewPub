@@ -108,6 +108,39 @@ export default function Reader() {
     }
 
     // ── Translate word EN→IT ────────────────────────────────
+    // The public gtx endpoint rate-limits whole networks (HTTP 429 with no CORS
+    // headers), so every lookup walks a fallback chain of mirrors.
+    const fetchTranslation = useCallback(async (text) => {
+        const q = encodeURIComponent(text);
+        const isSame = (s) => !s || s.trim().toLowerCase() === text.trim().toLowerCase();
+
+        // 1) Classic unofficial endpoint — best segmentation for long text.
+        try {
+            const resp = await fetch(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=it&dt=t&q=${q}`);
+            const data = await resp.json();
+            const out = (Array.isArray(data?.[0]) ? data[0] : []).map((seg) => seg?.[0] || '').join('');
+            if (!isSame(out)) return out;
+        } catch { /* try next */ }
+
+        // 2) Chrome dictionary endpoint — same translator, separate quota.
+        try {
+            const resp = await fetch(`https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=en&tl=it&q=${q}`);
+            const data = await resp.json();
+            const out = (Array.isArray(data) ? data.flat(Infinity) : []).filter((s) => typeof s === 'string').join(' ').trim();
+            if (!isSame(out)) return out;
+        } catch { /* try next */ }
+
+        // 3) MyMemory — last resort; it sometimes echoes the input back, hence the check.
+        try {
+            const resp = await fetch(`https://api.mymemory.translated.net/get?q=${q}&langpair=en|it`);
+            const data = await resp.json();
+            const out = data?.responseData?.translatedText;
+            if (!isSame(out)) return out;
+        } catch { /* give up */ }
+
+        return null;
+    }, []);
+
     const translateWord = useCallback(async (word, x, y, context = '') => {
         setDictWord(word);
         setDictTranslation(null);
@@ -119,11 +152,7 @@ export default function Reader() {
             .then((entry) => setDictSaved(!!entry))
             .catch(() => setDictSaved(false));
         try {
-            const resp = await fetch(
-                `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=it&dt=t&q=${encodeURIComponent(word)}`
-            );
-            const data = await resp.json();
-            const translated = data?.[0]?.[0]?.[0];
+            const translated = await fetchTranslation(word);
             if (translated && translated.toLowerCase() !== word.toLowerCase()) {
                 setDictTranslation(translated);
             } else {
@@ -134,7 +163,7 @@ export default function Reader() {
         } finally {
             setDictLoading(false);
         }
-    }, [bookId]);
+    }, [bookId, fetchTranslation]);
 
     const closeDictionary = useCallback(() => {
         setDictWord(null);
