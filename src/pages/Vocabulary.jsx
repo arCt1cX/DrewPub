@@ -6,6 +6,7 @@ import {
     IconSearch, IconClose, IconTrash, IconCards, IconBookOpen,
     IconStar, IconArrowRight, IconCheck, IconEye, IconRefresh,
 } from '../components/Icons';
+import BookCover from '../components/CoverArt';
 import './Vocabulary.css';
 
 export default function Vocabulary() {
@@ -16,6 +17,7 @@ export default function Vocabulary() {
     const [query, setQuery] = useState('');
     const [bookFilter, setBookFilter] = useState('all');
     const [reviewing, setReviewing] = useState(false);
+    const [removing, setRemoving] = useState(null);
 
     const load = useCallback(async () => {
         try {
@@ -48,9 +50,16 @@ export default function Vocabulary() {
         return books.filter((b) => ids.has(b.id));
     }, [entries, books]);
 
+    const bookById = useMemo(() => Object.fromEntries(books.map((b) => [b.id, b])), [books]);
+
+    // The card folds away first, then the word is removed.
     const handleDelete = async (entry) => {
+        setRemoving(entry.id);
         await deleteVocabEntry(entry.id);
-        setEntries((prev) => prev.filter((e) => e.id !== entry.id));
+        setTimeout(() => {
+            setEntries((prev) => prev.filter((e) => e.id !== entry.id));
+            setRemoving(null);
+        }, 320);
     };
 
     const handleOpen = (entry) => {
@@ -74,14 +83,14 @@ export default function Vocabulary() {
         <div className="vocab-page page">
             <header className="page-head">
                 <div className="page-head-text">
-                    <h1 className="page-head-title">Vocabulary</h1>
                     <span className="page-head-sub">
                         {entries.length} {entries.length === 1 ? 'saved word' : 'saved words'}
                     </span>
+                    <h1 className="page-head-title">Vocabulary</h1>
                 </div>
                 {entries.length > 0 && (
                     <button
-                        className="btn btn-primary vocab-review-btn"
+                        className="page-head-action"
                         onClick={() => setReviewing(true)}
                         disabled={filtered.length === 0}
                     >
@@ -143,9 +152,13 @@ export default function Vocabulary() {
                         <p className="empty-desc">No words match this filter.</p>
                     </div>
                 ) : (
-                    <div className="vocab-list stagger-children">
-                        {filtered.map((entry) => (
-                            <article key={entry.id} className="vocab-card">
+                    <div className="vocab-list">
+                        {filtered.map((entry, i) => (
+                            <article
+                                key={entry.id}
+                                className={`vocab-card ${removing === entry.id ? 'removing' : ''}`}
+                                style={{ '--i': Math.min(i, 12) }}
+                            >
                                 <div className="vocab-card-main">
                                     <h3 className="vocab-term">{entry.text}</h3>
                                     <p className="vocab-translation">{entry.translation}</p>
@@ -154,9 +167,13 @@ export default function Vocabulary() {
                                     )}
                                     <div className="vocab-meta">
                                         {entry.bookTitle && (
-                                            <span className="vocab-meta-item">
-                                                <IconBookOpen size={12} />
-                                                {entry.bookTitle}
+                                            <span className="vocab-meta-item vocab-meta-book">
+                                                {bookById[entry.bookId] ? (
+                                                    <span className="vocab-meta-cover">
+                                                        <BookCover book={bookById[entry.bookId]} />
+                                                    </span>
+                                                ) : <IconBookOpen size={12} />}
+                                                <span className="vocab-meta-book-title">{entry.bookTitle}</span>
                                             </span>
                                         )}
                                         <span className="vocab-meta-item">{formatDate(entry.createdAt)}</span>
@@ -229,21 +246,19 @@ function ReviewSession({ entries, onExit }) {
         <div className="review-page page">
             <header className="page-head">
                 <div className="page-head-text">
-                    <h1 className="page-head-title">Review</h1>
                     <span className="page-head-sub">
-                        {done ? 'Session complete' : `${index + 1} of ${deck.length}`}
+                        {done ? 'Session complete' : `Card ${index + 1} of ${deck.length}`}
                     </span>
+                    <h1 className="page-head-title">Review</h1>
                 </div>
                 <button className="btn-icon review-close" onClick={onExit} title="Close review">
                     <IconClose size={16} />
                 </button>
             </header>
 
-            <div className="review-progress">
-                <div
-                    className="review-progress-fill"
-                    style={{ width: `${deck.length ? (index / deck.length) * 100 : 0}%` }}
-                />
+            <div className="review-progress" style={{ '--p': `${deck.length ? (index / deck.length) * 100 : 0}%` }}>
+                <div className="review-progress-track"><div className="review-progress-fill" /></div>
+                <span className="review-progress-ribbon" />
             </div>
 
             <main className="review-content">
@@ -269,20 +284,24 @@ function ReviewSession({ entries, onExit }) {
                     <>
                         <button
                             type="button"
+                            key={card.id}
                             className={`review-card ${revealed ? 'revealed' : ''}`}
                             onClick={() => setRevealed(true)}
+                            aria-label={revealed ? `${card.text}: ${card.translation}` : `${card.text}. Tap to reveal`}
                         >
-                            <span className="review-card-term">{card.text}</span>
-                            {revealed ? (
-                                <>
+                            <span className="review-card-inner">
+                                <span className="review-face review-front">
+                                    <span className="review-card-term">{card.text}</span>
+                                    <span className="review-card-hint">Tap to reveal</span>
+                                </span>
+                                <span className="review-face review-back">
+                                    <span className="review-card-term small">{card.text}</span>
                                     <span className="review-card-translation">{card.translation}</span>
                                     {card.context && card.context !== card.text && (
                                         <span className="review-card-context">{card.context}</span>
                                     )}
-                                </>
-                            ) : (
-                                <span className="review-card-hint">Tap to reveal</span>
-                            )}
+                                </span>
+                            </span>
                         </button>
 
                         {revealed && (

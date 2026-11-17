@@ -1,0 +1,129 @@
+/* ─── Library ladder (scroll indicator) ──────────────── */
+
+/* The ladder replaces the page scrollbar on the library-side pages. */
+html.has-ladder {
+    scrollbar-width: none;
+}
+
+html.has-ladder::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+}
+
+.ladder-rail {
+    position: fixed;
+    top: calc(var(--safe-top) + 14px);
+    bottom: calc(var(--safe-bottom) + 86px);
+    right: max(5px, var(--safe-right));
+    width: 2px;
+    z-index: 85;
+    border-radius: 2px;
+    background: linear-gradient(var(--wood-3), var(--wood-2));
+    opacity: 0.5;
+    transition: opacity 0.4s ease;
+    pointer-events: none;
+}
+
+.ladder-rail::before,
+.ladder-rail::after {
+    /* Brass brackets holding the rail. */
+    content: '';
+    position: absolute;
+    left: -2px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #EBD397, #B48A3C);
+}
+
+.ladder-rail::before { top: -3px; }
+.ladder-rail::after { bottom: -3px; }
+
+.ladder-rail.ladder-awake {
+    opacity: 1;
+}
+
+.ladder-rail.ladder-hidden {
+    opacity: 0;
+}
+
+.ladder-rail.ladder-hidden .ladder {
+    pointer-events: none;
+}
+
+.ladder {
+    --y: 0px;
+    --tilt: 0deg;
+    position: absolute;
+    top: 0;
+    left: -8px;
+    width: 16px;
+    height: 60px;
+    /* Wider invisible grip so it's easy to catch with a thumb. */
+    padding: 0 6px;
+    margin-left: -6px;
+    box-sizing: content-box;
+    transform: translateY(var(--y)) rotate(var(--tilt));
+    transform-origin: 50% 0;
+    transition: transform 0.5s var(--ease-spring), height 0.3s var(--ease-out);
+    pointer-events: auto;
+    touch-action: none;
+    cursor: grab;
+    animation: ladderIn 0.8s var(--ease-spring) backwards 0.4s;
+}
+
+@keyframes ladderIn {
+    from { transform: translateY(calc(var(--y) - 30px)) rotate(12deg); opacity: 0; }
+}
+
+.ladder-dragging .ladder {
+    cursor: grabbing;
+    transition: height 0.3s var(--ease-out);
+}
+
+.ladder-body {
+    position: absolute;
+    inset: 4px 6px 5px;
+    border-left: 2px solid var(--wood-3);
+    border-right: 2px solid var(--wood-3);
+    background: repeating-linear-gradient(transparent 0 7px, var(--wood-2) 7px 9px);
+    filter: drop-shadow(1px 2px 2px var(--shelf-shadow));
+    transition: transform 0.25s var(--ease-spring);
+}
+
+.ladder-dragging .ladder-body {
+    transform: scaleX(1.15);
+}
+
+.ladder-hook {
+    position: absolute;
+    top: 0;
+    left: 50%;
+    width: 10px;
+    height: 6px;
+    transform: translateX(-50%);
+    border: 2px solid #B48A3C;
+    border-bottom: none;
+    border-radius: 5px 5px 0 0;
+}
+
+.ladder-wheels {
+    position: absolute;
+    left: 5px;
+    right: 5px;
+    bottom: 0;
+    height: 5px;
+    background:
+        radial-gradient(circle at 2.5px 2.5px, var(--wood-3) 2.4px, transparent 2.6px) left / 5px 5px no-repeat,
+        radial-gradient(circle at 2.5px 2.5px, var(--wood-3) 2.4px, transparent 2.6px) right / 5px 5px no-repeat;
+}
+
+@media (hover: hover) {
+    .ladder:hover .ladder-body {
+        transform: scaleX(1.12);
+    }
+
+    .ladder-rail:has(.ladder:hover) {
+        opacity: 1;
+    }
+}

@@ -2,14 +2,15 @@
 
 .stats-content {
     flex: 1;
-    padding: 8px 22px calc(90px + var(--safe-bottom));
-    overflow-y: auto;
+    padding: 10px 22px calc(96px + var(--safe-bottom));
 }
+
+/* Tiles */
 
 .stats-tiles {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 10px;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
 }
 
 .stats-tile {
@@ -17,33 +18,46 @@
     flex-direction: column;
     align-items: flex-start;
     gap: 2px;
-    padding: 14px 14px 12px;
+    padding: 16px 16px 14px;
     background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-sm);
+    border-radius: var(--radius-xl);
+    box-shadow: 0 1px 0 var(--border), var(--shadow-sm);
+    animation: fadeInUp 0.6s var(--ease-out) backwards;
+    animation-delay: calc(var(--i) * 70ms);
 }
 
 .stats-tile-icon {
-    color: var(--accent);
-    margin-bottom: 4px;
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    margin-bottom: 8px;
+    border-radius: 50%;
+    color: var(--accent-secondary);
+    background: color-mix(in srgb, var(--accent-secondary) 14%, transparent);
 }
 
 .stats-tile-value {
     font-family: var(--font-serif);
-    font-size: 1.5rem;
-    line-height: 1.1;
+    font-size: 1.9rem;
+    line-height: 1;
     color: var(--text);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
 }
 
 .stats-tile-label {
-    font-size: 0.68rem;
-    letter-spacing: 0.4px;
+    margin-top: 2px;
+    font-size: 0.7rem;
+    font-weight: 600;
     color: var(--text-secondary);
 }
 
+/* Sections */
+
 .stats-section {
-    margin-top: 26px;
+    margin-top: 30px;
+    animation: fadeIn 0.6s ease backwards 0.25s;
 }
 
 .stats-section-head {
@@ -56,65 +70,135 @@
 
 .stats-section-title {
     font-family: var(--font-serif);
-    font-size: 1.15rem;
+    font-size: 1.45rem;
     font-weight: 400;
     color: var(--text);
 }
 
 .stats-section-note {
     font-size: 0.72rem;
+    font-weight: 600;
     color: var(--text-secondary);
     text-align: right;
 }
 
-/* Chart */
+/* Two weeks as a shelf of spines: taller book, more reading that day. */
 
-.stats-chart {
-    display: flex;
-    align-items: flex-end;
-    gap: 6px;
-    height: 150px;
-    padding: 14px 14px 10px;
+.stats-shelf {
+    padding: 20px 18px 14px;
     background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-sm);
+    border-radius: var(--radius-xl);
+    box-shadow: 0 1px 0 var(--border), var(--shadow-sm);
 }
 
-.stats-bar-col {
-    flex: 1 1 0;
+.stats-spines,
+.stats-days {
+    display: grid;
+    grid-template-columns: repeat(14, minmax(0, 1fr));
+    gap: 4px;
+    padding: 0 6px;
+}
+
+.stats-spines {
+    height: 150px;
+    align-items: end;
+}
+
+.stats-spine-slot {
     height: 100%;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 6px;
-    min-width: 0;
-}
-
-.stats-bar-track {
-    flex: 1 1 auto;
-    width: 100%;
     display: flex;
     align-items: flex-end;
     justify-content: center;
+    padding: 0;
+    border: none;
+    background: none;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
 }
 
-.stats-bar {
+.stats-spine {
+    position: relative;
+    display: block;
     width: 100%;
-    max-width: 22px;
-    border-radius: var(--radius-sm);
+    max-width: 26px;
+    border-radius: 2px 2px 1px 1px;
+    background:
+        linear-gradient(90deg, rgba(0,0,0,0.25), transparent 18%, rgba(255,255,255,0.16) 45%, transparent 65%, rgba(0,0,0,0.2)),
+        linear-gradient(var(--c1), var(--c2));
+    box-shadow: 1px 0 0 rgba(0,0,0,0.12);
+    transform-origin: bottom;
+    animation: spineRise 0.8s var(--ease-spring) backwards;
+    animation-delay: calc(var(--i) * 45ms + 0.3s);
+    transition: transform 0.4s var(--ease-spring);
+}
+
+.stats-spine::before,
+.stats-spine::after {
+    /* Gilt bands on the spine. */
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 4px;
+    border-block: 1px solid rgba(235,211,151,0.7);
+}
+
+.stats-spine::before { top: 6px; }
+.stats-spine::after { bottom: 8px; }
+
+@keyframes spineRise {
+    from { transform: scaleY(0); }
+}
+
+.stats-spine-slot:hover .stats-spine,
+.stats-spine-slot.picked .stats-spine {
+    transform: translateY(-8px);
+}
+
+.stats-spine-gap {
+    display: block;
+    width: 70%;
+    max-width: 20px;
+    height: 6px;
+    border-radius: 2px 2px 0 0;
     background: var(--border-strong);
-    transition: height var(--transition-normal);
 }
 
-.stats-bar.has-value {
-    background: var(--accent);
+.stats-ledge {
+    height: 12px;
+    margin: 0 -4px;
+    border-radius: 3px 3px 6px 6px;
+    background: linear-gradient(var(--wood-1), var(--wood-2) 55%, var(--wood-3));
+    box-shadow: 0 8px 12px -8px var(--shelf-shadow), inset 0 1px 0 rgba(255,255,255,0.3);
 }
 
-.stats-bar-label {
+.stats-days {
+    padding-top: 8px;
+}
+
+.stats-days span {
     font-size: 0.6rem;
-    color: var(--text-softer);
+    font-weight: 700;
+    text-align: center;
     text-transform: uppercase;
+    color: var(--text-softer);
+}
+
+.stats-days span.today {
+    color: var(--accent-secondary);
+}
+
+.stats-picked {
+    margin-top: 12px;
+    font-size: 0.74rem;
+    color: var(--text-secondary);
+    text-align: center;
+    min-height: 1.2em;
+}
+
+.stats-picked b {
+    font-weight: 700;
+    color: var(--text);
 }
 
 /* Per-book breakdown */
@@ -122,18 +206,40 @@
 .stats-books {
     display: flex;
     flex-direction: column;
-    gap: 12px;
-    padding: 16px;
+    gap: 14px;
+    padding: 18px;
     background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-sm);
+    border-radius: var(--radius-xl);
+    box-shadow: 0 1px 0 var(--border), var(--shadow-sm);
 }
 
 .stats-book-row {
     display: flex;
+    align-items: center;
+    gap: 14px;
+    animation: fadeInUp 0.5s var(--ease-out) backwards;
+    animation-delay: calc(var(--i) * 60ms + 0.35s);
+}
+
+.stats-book-cover {
+    flex: 0 0 auto;
+    width: 38px;
+    aspect-ratio: 2 / 3;
+    overflow: hidden;
+    border-radius: 2px 4px 4px 2px;
+    box-shadow: 0 8px 10px -6px var(--shelf-shadow);
+}
+
+.stats-book-cover .cover-art-author {
+    display: none;
+}
+
+.stats-book-body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
     flex-direction: column;
-    gap: 5px;
+    gap: 6px;
 }
 
 .stats-book-info {
@@ -144,7 +250,9 @@
 }
 
 .stats-book-title {
-    font-size: 0.85rem;
+    font-family: var(--font-serif);
+    font-style: italic;
+    font-size: 1.02rem;
     color: var(--text);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -154,26 +262,37 @@
 .stats-book-time {
     flex: 0 0 auto;
     font-size: 0.78rem;
+    font-weight: 700;
     color: var(--accent-secondary-deep);
-    font-weight: 600;
+    font-variant-numeric: tabular-nums;
 }
 
 .stats-book-track {
     height: 5px;
     border-radius: var(--radius-pill);
-    background: var(--border);
+    background: var(--surface-warm);
     overflow: hidden;
+}
+
+[data-theme-mode="dark"] .stats-book-track {
+    background: var(--border-strong);
 }
 
 .stats-book-fill {
     height: 100%;
-    border-radius: var(--radius-pill);
-    background: var(--accent);
-    transition: width var(--transition-normal);
+    border-radius: inherit;
+    background: var(--accent-secondary);
+    transform-origin: left;
+    animation: statsGrow 1s var(--ease-out) backwards 0.5s;
+}
+
+@keyframes statsGrow {
+    from { transform: scaleX(0); }
 }
 
 .stats-book-progress {
     font-size: 0.68rem;
+    font-weight: 600;
     color: var(--text-softer);
 }
 
@@ -191,20 +310,30 @@
 
 @media (max-width: 500px) {
     .stats-content {
-        padding: 8px 16px calc(86px + var(--safe-bottom));
+        padding: 6px 16px calc(96px + var(--safe-bottom));
     }
 
     .stats-tiles {
-        grid-template-columns: repeat(2, 1fr);
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
     }
 
     .stats-tile-value {
-        font-size: 1.35rem;
+        font-size: 1.65rem;
     }
 
-    .stats-chart {
+    .stats-shelf {
+        padding: 16px 12px 12px;
+    }
+
+    .stats-spines {
         height: 130px;
-        gap: 4px;
-        padding: 12px 10px 8px;
+        gap: 3px;
+        padding: 0 2px;
+    }
+
+    .stats-days {
+        gap: 3px;
+        padding: 8px 2px 0;
     }
 }

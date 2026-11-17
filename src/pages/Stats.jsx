@@ -1,10 +1,39 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { getAllReadingStats, getAllBooks, getAllVocab, dayKey } from '../db';
 import { formatDuration } from '../utils/format';
 import { IconClock, IconFlame, IconStar, IconBookOpen, IconChart } from '../components/Icons';
+import BookCover from '../components/CoverArt';
 import './Stats.css';
 
 const CHART_DAYS = 14;
+
+// Spine colours for the two-week shelf, the same cloths as generated covers.
+const SPINES = [
+    ['#7E9078', '#55684F'], ['#C97B5F', '#9E5239'], ['#6D8597', '#435A6B'], ['#D1A35A', '#A3742E'],
+    ['#8C6A7E', '#5B4152'], ['#94966A', '#676943'], ['#B98A72', '#87604C'], ['#5F8A85', '#3E605C'],
+];
+
+// Counts up from zero when the number first appears.
+function useCountUp(target, duration = 900) {
+    const [value, setValue] = useState(0);
+    const raf = useRef(0);
+    useEffect(() => {
+        if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+            setValue(target);
+            return undefined;
+        }
+        const start = performance.now();
+        const tick = (now) => {
+            const t = Math.min(1, (now - start) / duration);
+            const eased = 1 - Math.pow(1 - t, 3);
+            setValue(Math.round(target * eased));
+            if (t < 1) raf.current = requestAnimationFrame(tick);
+        };
+        raf.current = requestAnimationFrame(tick);
+        return () => cancelAnimationFrame(raf.current);
+    }, [target, duration]);
+    return value;
+}
 
 // Last N days, oldest first, each with the total time read that day.
 function buildChart(byDay) {
@@ -41,6 +70,7 @@ export default function Stats() {
     const [books, setBooks] = useState([]);
     const [vocabCount, setVocabCount] = useState(0);
     const [loading, setLoading] = useState(true);
+    const [picked, setPicked] = useState(null);
 
     useEffect(() => {
         (async () => {
@@ -99,10 +129,10 @@ export default function Stats() {
         <div className="stats-page page">
             <header className="page-head">
                 <div className="page-head-text">
-                    <h1 className="page-head-title">Statistics</h1>
                     <span className="page-head-sub">
                         {view.daysRead} {view.daysRead === 1 ? 'day' : 'days'} of reading
                     </span>
+                    <h1 className="page-head-title">Statistics</h1>
                 </div>
             </header>
 
@@ -125,23 +155,27 @@ export default function Stats() {
                     <>
                         <div className="stats-tiles">
                             <Tile
+                                i={0}
                                 Icon={IconClock}
-                                value={formatDuration(view.total, { short: true })}
+                                minutes={Math.floor(view.total / 60000)}
                                 label="Total read"
                             />
                             <Tile
+                                i={1}
                                 Icon={IconFlame}
-                                value={`${view.streak}`}
+                                count={view.streak}
                                 label="Day streak"
                             />
                             <Tile
+                                i={2}
                                 Icon={IconBookOpen}
-                                value={`${view.finished}`}
+                                count={view.finished}
                                 label={view.finished === 1 ? 'Book finished' : 'Books finished'}
                             />
                             <Tile
+                                i={3}
                                 Icon={IconStar}
-                                value={`${vocabCount}`}
+                                count={vocabCount}
                                 label={vocabCount === 1 ? 'Word saved' : 'Words saved'}
                             />
                         </div>
@@ -153,20 +187,52 @@ export default function Stats() {
                                     {formatDuration(view.week, { short: true })} in the last 7 days
                                 </span>
                             </div>
-                            <div className="stats-chart">
-                                {view.chart.map((d) => (
-                                    <div key={d.key} className="stats-bar-col" title={`${formatDuration(d.ms, { short: true })}`}>
-                                        <div className="stats-bar-track">
-                                            <div
-                                                className={`stats-bar ${d.ms > 0 ? 'has-value' : ''}`}
-                                                style={{ height: `${d.ms > 0 ? Math.max(6, (d.ms / peak) * 100) : 0}%` }}
-                                            />
-                                        </div>
-                                        <span className="stats-bar-label">
+                            <div className="stats-shelf">
+                                <div className="stats-spines">
+                                    {view.chart.map((d, i) => {
+                                        const [c1, c2] = SPINES[i % SPINES.length];
+                                        const isToday = i === view.chart.length - 1;
+                                        return (
+                                            <button
+                                                type="button"
+                                                key={d.key}
+                                                className={`stats-spine-slot ${picked === i ? 'picked' : ''}`}
+                                                onClick={() => setPicked(picked === i ? null : i)}
+                                                aria-label={`${d.date.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })}: ${formatDuration(d.ms)}`}
+                                            >
+                                                {d.ms > 0 ? (
+                                                    <span
+                                                        className={`stats-spine ${isToday ? 'today' : ''}`}
+                                                        style={{
+                                                            height: `${Math.max(10, (d.ms / peak) * 100)}%`,
+                                                            '--c1': isToday ? 'var(--accent-secondary)' : c1,
+                                                            '--c2': isToday ? 'var(--accent-secondary-deep)' : c2,
+                                                            '--i': i,
+                                                        }}
+                                                    />
+                                                ) : (
+                                                    <span className="stats-spine-gap" />
+                                                )}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                                <div className="stats-ledge" />
+                                <div className="stats-days">
+                                    {view.chart.map((d, i) => (
+                                        <span key={d.key} className={i === view.chart.length - 1 ? 'today' : ''}>
                                             {d.date.toLocaleDateString(undefined, { weekday: 'narrow' })}
                                         </span>
-                                    </div>
-                                ))}
+                                    ))}
+                                </div>
+                                <p className="stats-picked">
+                                    {picked !== null
+                                        ? <>
+                                            <b>{view.chart[picked].date.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short' })}</b>
+                                            {' · '}{view.chart[picked].ms > 0 ? formatDuration(view.chart[picked].ms, { short: true }) : 'no reading'}
+                                        </>
+                                        : 'Tap a book to see that day'}
+                                </p>
                             </div>
                         </section>
 
@@ -178,19 +244,26 @@ export default function Stats() {
                                 </span>
                             </div>
                             <div className="stats-books">
-                                {view.perBook.map(({ book, ms }) => (
-                                    <div key={book.id} className="stats-book-row">
-                                        <div className="stats-book-info">
-                                            <span className="stats-book-title">{book.title || 'Untitled'}</span>
-                                            <span className="stats-book-time">{formatDuration(ms, { short: true })}</span>
+                                {view.perBook.map(({ book, ms }, i) => (
+                                    <div key={book.id} className="stats-book-row" style={{ '--i': i }}>
+                                        <div className="stats-book-cover">
+                                            <BookCover book={book} />
                                         </div>
-                                        <div className="stats-book-track">
-                                            <div
-                                                className="stats-book-fill"
-                                                style={{ width: `${(ms / bookPeak) * 100}%` }}
-                                            />
+                                        <div className="stats-book-body">
+                                            <div className="stats-book-info">
+                                                <span className="stats-book-title">{book.title || 'Untitled'}</span>
+                                                <span className="stats-book-time">{formatDuration(ms, { short: true })}</span>
+                                            </div>
+                                            <div className="stats-book-track">
+                                                <div
+                                                    className="stats-book-fill"
+                                                    style={{ width: `${(ms / bookPeak) * 100}%` }}
+                                                />
+                                            </div>
+                                            <span className="stats-book-progress">
+                                                {(book.progress ?? 0) >= 100 ? 'Finished' : (book.progress ?? 0) > 0 ? `${book.progress}% read` : 'Under 1% read'}
+                                            </span>
                                         </div>
-                                        <span className="stats-book-progress">{book.progress ?? 0}% read</span>
                                     </div>
                                 ))}
                             </div>
@@ -202,10 +275,17 @@ export default function Stats() {
     );
 }
 
-function Tile({ Icon, value, label }) {
+function Tile({ i, Icon, count, minutes, label }) {
+    const shown = useCountUp(minutes ?? count ?? 0);
+    let value = `${shown}`;
+    if (minutes !== undefined) {
+        const h = Math.floor(shown / 60);
+        const m = shown % 60;
+        value = h ? `${h}h ${m}m` : `${m}m`;
+    }
     return (
-        <div className="stats-tile">
-            <Icon size={17} className="stats-tile-icon" />
+        <div className="stats-tile" style={{ '--i': i }}>
+            <span className="stats-tile-icon"><Icon size={16} /></span>
             <span className="stats-tile-value">{value}</span>
             <span className="stats-tile-label">{label}</span>
         </div>

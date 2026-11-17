@@ -5,6 +5,7 @@ import Reader from './pages/Reader';
 import Vocabulary from './pages/Vocabulary';
 import Stats from './pages/Stats';
 import BottomNav from './components/BottomNav';
+import LadderScroll from './components/LadderScroll';
 
 // The reader is full-screen and has its own controls; the nav belongs to the
 // three library-side tabs only.
@@ -23,6 +24,7 @@ export default function App() {
                 <Route path="/read/:bookId" element={<Reader />} />
             </Routes>
             {showNav && <BottomNav />}
+            {showNav && <LadderScroll />}
         </div>
     );
 }
