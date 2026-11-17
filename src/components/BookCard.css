@@ -2,7 +2,7 @@
 
 .shelf-book {
     position: relative;
-    justify-self: center;
+    width: 100%;
     align-self: end;
     cursor: pointer;
     -webkit-user-select: none;

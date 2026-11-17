@@ -38,7 +38,7 @@ export default function ContinueReading({ book, readingMs = 0 }) {
                     <span className="continue-ribbon" />
                 </div>
                 <div className="continue-meta">
-                    <span>{progress}%</span>
+                    <span>{progress > 0 ? `${progress}%` : 'Just started'}</span>
                     {remaining
                         ? <span>~{formatDuration(remaining, { short: true })} left</span>
                         : readingMs >= 60000 && <span>{formatDuration(readingMs, { short: true })} read</span>}

@@ -29,11 +29,11 @@ function useShelfColumns(ref) {
     return cols;
 }
 
-function shelfLabel(book) {
+function shelfLabel(book, started) {
     const p = book.progress || 0;
     if (p >= 100) return 'Finished';
-    if (p <= 0) return 'New';
-    return `${p}%`;
+    if (p > 0) return `${p}%`;
+    return started ? '<1%' : 'New';
 }
 
 export default function Library() {
@@ -320,10 +320,18 @@ export default function Library() {
 
     const showSearchResults = searchResults !== null || searching || searchError;
 
+    // A long web novel can sit at 0% for dozens of chapters, so time spent
+    // reading or a remembered chapter also count as having started it.
+    const hasStarted = (b) => (b.progress || 0) > 0
+        || (readingTimes[b.id] ?? 0) > 0
+        || !!b.lastChapter
+        // Opened at some point after it was added.
+        || ((b.lastReadAt || 0) - (b.addedAt || 0) > 60000);
+
     // The book you're in the middle of, most recently opened first.
     const currentBook = [...books]
         .sort((a, b) => (b.lastReadAt || 0) - (a.lastReadAt || 0))
-        .find(b => (b.progress || 0) > 0 && (b.progress || 0) < 100);
+        .find(b => (b.progress || 0) < 100 && hasStarted(b));
 
     const shelves = [];
     for (let i = 0; i < sortedBooks.length; i += shelfCols) {
@@ -350,7 +358,7 @@ export default function Library() {
                         ref={searchInputRef}
                         type="text"
                         className="search-input"
-                        placeholder="Search books, or paste a novel link…"
+                        placeholder="Search, or paste a novel link"
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
                         onKeyDown={handleSearchKeyDown}
@@ -596,7 +604,7 @@ export default function Library() {
                                                     key={book.id}
                                                     className={`shelf-plate ${(book.progress || 0) >= 100 ? 'done' : ''}`}
                                                 >
-                                                    {shelfLabel(book)}
+                                                    {shelfLabel(book, hasStarted(book))}
                                                 </span>
                                             ))}
                                         </div>

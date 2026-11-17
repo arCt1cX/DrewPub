@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { deleteBook, updateBookMeta } from '../db';
 import { IconTrash, IconMore, IconMoreH, IconRefresh } from './Icons';
-import BookCover, { hashString } from './CoverArt';
+import BookCover from './CoverArt';
 import { formatDuration, estimateRemaining } from '../utils/format';
 import './BookCard.css';
 
@@ -104,14 +104,13 @@ export default function BookCard({ book, viewMode, onDelete, onSync, readingMs =
     }
 
     // Shelf mode: the book stands on a ledge, its status is printed under it
-    // by the shelf itself. A little width variety makes the row feel real.
-    const width = 90 + (hashString(book.id || book.title) % 11);
+    // by the shelf itself.
 
     return (
         <div
             ref={rootRef}
             className={`shelf-book ${showMenu ? 'menu-open' : ''}`}
-            style={{ '--i': Math.min(index, 14), width: `${width}%` }}
+            style={{ '--i': Math.min(index, 14) }}
             onClick={handleOpen}
             role="button"
             tabIndex={0}

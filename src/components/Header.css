@@ -4,7 +4,6 @@
     justify-content: space-between;
     gap: 16px;
     padding: 18px 22px 6px;
-    padding-top: calc(18px + var(--safe-top));
     animation: fadeInDown 0.5s var(--ease-out) both;
 }
 
@@ -76,7 +75,6 @@
 @media (max-width: 500px) {
     .header {
         padding: 14px 16px 4px;
-        padding-top: calc(14px + var(--safe-top));
     }
 
     .header-title {
