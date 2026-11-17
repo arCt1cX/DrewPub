@@ -8,6 +8,7 @@ import {
 import { useSettings } from '../contexts/SettingsContext';
 import { FONTS, getTheme } from '../styles/themes';
 import ReaderControls from '../components/ReaderControls';
+import BookOpening from '../components/BookOpening';
 import SettingsPanel from '../components/SettingsPanel';
 import TableOfContents from '../components/TableOfContents';
 import DictionaryPopup from '../components/DictionaryPopup';
@@ -37,6 +38,8 @@ export default function Reader() {
     const [showToc, setShowToc] = useState(false);
     const [totalPages, setTotalPages] = useState('Calculating...');
     const [currentPage, setCurrentPage] = useState(0);
+    const [chapterPos, setChapterPos] = useState(null);
+    const [openingDone, setOpeningDone] = useState(false);
 
     // Dictionary popup state
     const [dictWord, setDictWord] = useState(null);
@@ -58,6 +61,17 @@ export default function Reader() {
 
     // TTS hook
     const tts = useTts({ renditionRef, viewerRef, settings, bookId });
+
+    // Page turns remember their direction so the new page can slide in
+    // from the side it came from once epub.js has relocated.
+    const turnDirRef = useRef(0);
+    const turnPage = useCallback((dir) => {
+        turnDirRef.current = dir;
+        // Nothing to relocate to (first/last page): forget the direction.
+        setTimeout(() => { if (turnDirRef.current === dir) turnDirRef.current = 0; }, 800);
+        if (dir > 0) renditionRef.current?.next();
+        else renditionRef.current?.prev();
+    }, []);
     const [showCharacterPanel, setShowCharacterPanel] = useState(false);
 
     useEffect(() => { showControlsRef.current = showControls; }, [showControls]);
@@ -101,9 +115,9 @@ export default function Reader() {
     // ── Keyboard navigation ───────────────────────────────
     function handleKeyPress(e) {
         if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
-            renditionRef.current?.next();
+            turnPage(1);
         } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
-            renditionRef.current?.prev();
+            turnPage(-1);
         }
     }
 
@@ -326,15 +340,35 @@ export default function Reader() {
 
         setProgress(progressPct);
         setCurrentPage(p);
+        setChapterPos(location.start.displayed || null);
         activityRef.current = Date.now();
         savePosition(bookId, cfi, progressPct);
-        updateBookMeta(bookId, { progress: progressPct, lastReadAt: Date.now() });
-        
+
         const chapter = book.navigation?.toc?.find(item => {
             const itemHref = item.href.split('#')[0];
             return href?.includes(itemHref);
         });
-        if (chapter) setChapterTitle(chapter.label?.trim() || '');
+        const chapterLabel = chapter?.label?.trim() || '';
+        if (chapter) setChapterTitle(chapterLabel);
+        updateBookMeta(bookId, {
+            progress: progressPct,
+            lastReadAt: Date.now(),
+            ...(chapterLabel ? { lastChapter: chapterLabel } : {}),
+        });
+
+        // Slide the new page in from the side it came from.
+        const dir = turnDirRef.current;
+        turnDirRef.current = 0;
+        const viewer = viewerRef.current;
+        if (dir && viewer?.animate && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+            viewer.animate(
+                [
+                    { transform: `translateX(${dir * 26}px)`, opacity: 0.35 },
+                    { transform: 'translateX(0)', opacity: 1 },
+                ],
+                { duration: 340, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' }
+            );
+        }
 
         // ── Memory Optimization for Large Books (20-chapter window) ──
         if (book.spine && book.spine.length > 30 && location.start && typeof location.start.index !== 'undefined') {
@@ -821,9 +855,9 @@ export default function Reader() {
         const threshold = 60;
         if (Math.abs(finalPull) > threshold) {
             if (finalPull > 0) {
-                renditionRef.current?.prev();
+                turnPage(-1);
             } else {
-                renditionRef.current?.next();
+                turnPage(1);
             }
             return;
         }
@@ -848,9 +882,9 @@ export default function Reader() {
 
         if (isCurrentlyPaginated) {
             if (zone < 0.2) {
-                renditionRef.current?.prev();
+                turnPage(-1);
             } else if (zone > 0.8) {
-                renditionRef.current?.next();
+                turnPage(1);
             } else {
                 toggleControls();
             }
@@ -911,9 +945,9 @@ export default function Reader() {
 
         if (isCurrentlyPaginated) {
             if (zone < 0.2) {
-                renditionRef.current?.prev();
+                turnPage(-1);
             } else if (zone > 0.8) {
-                renditionRef.current?.next();
+                turnPage(1);
             } else {
                 toggleControls();
             }
@@ -937,6 +971,7 @@ export default function Reader() {
                     progress={progress}
                     currentPage={currentPage}
                     totalPages={totalPages}
+                    chapterPos={chapterPos}
                     isPaginated={isPaginated}
                     onBack={handleGoBack}
                     onToggleToc={() => { setShowToc(!showToc); setShowSettings(false); }}
@@ -949,8 +984,8 @@ export default function Reader() {
                         }
                     }}
                     ttsActive={tts.ttsActive || tts.ttsLoading}
-                    onPrev={() => renditionRef.current?.prev()}
-                    onNext={() => renditionRef.current?.next()}
+                    onPrev={() => turnPage(-1)}
+                    onNext={() => turnPage(1)}
                 />
             )}
 
@@ -970,6 +1005,22 @@ export default function Reader() {
                 ref={viewerRef}
                 className={`reader-viewer ${isPaginated ? 'reader-paginated' : 'reader-scroll'}`}
             />
+
+            {/* Page edges: the pages already read on the left, the rest on the right */}
+            {!loading && isPaginated && (
+                <>
+                    <div className="page-edges page-edges-left" style={{ width: `${1 + progress * 0.09}px` }} />
+                    <div className="page-edges page-edges-right" style={{ width: `${1 + (100 - progress) * 0.09}px` }} />
+                </>
+            )}
+
+            {!openingDone && (
+                <BookOpening
+                    book={bookMeta}
+                    ready={!loading}
+                    onDone={() => setOpeningDone(true)}
+                />
+            )}
 
             {/* TRANSPARENT OVERLAY — catches ALL touch/click in BOTH modes */}
             {!loading && (

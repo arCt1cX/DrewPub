@@ -1,13 +1,40 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Header from '../components/Header';
 import BookCard from '../components/BookCard';
+import ContinueReading from '../components/ContinueReading';
+import { CoverArt } from '../components/CoverArt';
 import SettingsPanel from '../components/SettingsPanel';
-import { IconSearch, IconClose, IconDownload, IconArrowLeft, IconArrowRight, IconPlus, IconBookOpen } from '../components/Icons';
+import { IconSearch, IconClose, IconDownload, IconArrowLeft, IconArrowRight, IconPlus, IconBookOpen, IconGrid, IconList, IconSort } from '../components/Icons';
 import { getAllBooks, addBook, getReadingTimeByBook } from '../db';
 import { parseEpub, generateId } from '../utils/epub';
 import { importNovel, syncNovel, isNovelUrl } from '../utils/novel';
 import { useSettings } from '../contexts/SettingsContext';
 import './Library.css';
+
+// How many books fit on one shelf for the space available.
+function useShelfColumns(ref) {
+    const [cols, setCols] = useState(3);
+    useEffect(() => {
+        const el = ref.current;
+        if (!el) return;
+        const measure = () => {
+            const w = el.clientWidth;
+            setCols(w < 480 ? 3 : w < 720 ? 4 : w < 960 ? 5 : 6);
+        };
+        measure();
+        const ro = new ResizeObserver(measure);
+        ro.observe(el);
+        return () => ro.disconnect();
+    }, [ref]);
+    return cols;
+}
+
+function shelfLabel(book) {
+    const p = book.progress || 0;
+    if (p >= 100) return 'Finished';
+    if (p <= 0) return 'New';
+    return `${p}%`;
+}
 
 export default function Library() {
     const { settings, updateSetting } = useSettings();
@@ -29,6 +56,8 @@ export default function Library() {
     const [downloadingId, setDownloadingId] = useState(null);
     const [downloadProgress, setDownloadProgress] = useState('');
     const searchInputRef = useRef(null);
+    const contentRef = useRef(null);
+    const shelfCols = useShelfColumns(contentRef);
 
     const loadBooks = useCallback(async () => {
         try {
@@ -291,6 +320,16 @@ export default function Library() {
 
     const showSearchResults = searchResults !== null || searching || searchError;
 
+    // The book you're in the middle of, most recently opened first.
+    const currentBook = [...books]
+        .sort((a, b) => (b.lastReadAt || 0) - (a.lastReadAt || 0))
+        .find(b => (b.progress || 0) > 0 && (b.progress || 0) < 100);
+
+    const shelves = [];
+    for (let i = 0; i < sortedBooks.length; i += shelfCols) {
+        shelves.push(sortedBooks.slice(i, i + shelfCols));
+    }
+
     return (
         <div
             className={`library-page page ${dragOver ? 'drag-over' : ''}`}
@@ -299,13 +338,6 @@ export default function Library() {
             onDragLeave={handleDragLeave}
         >
             <Header
-                viewMode={settings.libraryView}
-                onToggleView={() =>
-                    updateSetting('libraryView', settings.libraryView === 'grid' ? 'list' : 'grid')
-                }
-                sortBy={settings.librarySortBy}
-                onSortChange={(val) => updateSetting('librarySortBy', val)}
-                bookCount={books.length}
                 onUpload={handleUploadClick}
                 onShowSettings={() => setShowSettings(true)}
             />
@@ -318,7 +350,7 @@ export default function Library() {
                         ref={searchInputRef}
                         type="text"
                         className="search-input"
-                        placeholder="Search OceanOfPDF, or paste a novelight.net / freewebnovel.com link..."
+                        placeholder="Search books, or paste a novel link…"
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
                         onKeyDown={handleSearchKeyDown}
@@ -351,7 +383,7 @@ export default function Library() {
                 onChange={handleInputChange}
             />
 
-            <main className="library-content">
+            <main className="library-content" ref={contentRef}>
                 {/* ─── Search Results ─────────────────────── */}
                 {showSearchResults && (
                     <div className="search-results-section animate-fade-in">
@@ -399,9 +431,7 @@ export default function Library() {
                                                         onError={(e) => { e.target.style.display = 'none'; }}
                                                     />
                                                 ) : (
-                                                    <div className="search-result-no-cover">
-                                                        <IconBookOpen size={24} />
-                                                    </div>
+                                                    <CoverArt title={result.title} author={result.author} />
                                                 )}
                                             </div>
                                             <div className="search-result-info">
@@ -489,21 +519,92 @@ export default function Library() {
                             <IconPlus size={16} stroke={2.2} /> Add Your First Book
                         </button>
                     </div>
-                ) : (
-                    <div
-                        className={`library-grid ${settings.libraryView === 'list' ? 'library-list' : ''} stagger-children`}
-                    >
-                        {sortedBooks.map(book => (
-                            <BookCard
-                                key={book.id}
-                                book={book}
-                                viewMode={settings.libraryView}
-                                onDelete={handleDeleteBook}
-                                onSync={handleSyncBook}
-                                readingMs={readingTimes[book.id] ?? 0}
-                            />
-                        ))}
-                    </div>
+                ) : books.length > 0 && (
+                    <>
+                        {currentBook && !showSearchResults && (
+                            <ContinueReading book={currentBook} readingMs={readingTimes[currentBook.id] ?? 0} />
+                        )}
+
+                        <div className="shelf-head">
+                            <div className="shelf-head-text">
+                                <h2 className="shelf-head-title">On the shelf</h2>
+                                <span className="shelf-head-count">
+                                    {books.length} {books.length === 1 ? 'book' : 'books'}
+                                </span>
+                            </div>
+                            <div className="shelf-head-actions">
+                                <div className="sort-select-wrap">
+                                    <select
+                                        className="sort-select"
+                                        value={settings.librarySortBy}
+                                        onChange={e => updateSetting('librarySortBy', e.target.value)}
+                                        aria-label="Sort books"
+                                    >
+                                        <option value="lastReadAt">Recently read</option>
+                                        <option value="addedAt">Recently added</option>
+                                        <option value="title">Title</option>
+                                        <option value="author">Author</option>
+                                    </select>
+                                    <span className="sort-icon-wrap"><IconSort size={13} /></span>
+                                </div>
+                                <button
+                                    className="btn-icon view-toggle"
+                                    onClick={() => updateSetting('libraryView', settings.libraryView === 'grid' ? 'list' : 'grid')}
+                                    title={settings.libraryView === 'grid' ? 'Show as list' : 'Show as shelf'}
+                                    aria-label={settings.libraryView === 'grid' ? 'Show as list' : 'Show as shelf'}
+                                >
+                                    {settings.libraryView === 'grid' ? <IconList size={16} /> : <IconGrid size={16} />}
+                                </button>
+                            </div>
+                        </div>
+
+                        {settings.libraryView === 'list' ? (
+                            <div className="library-list">
+                                {sortedBooks.map((book, i) => (
+                                    <BookCard
+                                        key={book.id}
+                                        book={book}
+                                        index={i}
+                                        viewMode="list"
+                                        onDelete={handleDeleteBook}
+                                        onSync={handleSyncBook}
+                                        readingMs={readingTimes[book.id] ?? 0}
+                                    />
+                                ))}
+                            </div>
+                        ) : (
+                            <div className="shelves" style={{ '--cols': shelfCols }}>
+                                {shelves.map((row, ri) => (
+                                    <div className="shelf" key={ri}>
+                                        <div className="shelf-row">
+                                            {row.map((book, j) => (
+                                                <BookCard
+                                                    key={book.id}
+                                                    book={book}
+                                                    index={ri * shelfCols + j}
+                                                    viewMode="grid"
+                                                    onDelete={handleDeleteBook}
+                                                    onSync={handleSyncBook}
+                                                    readingMs={readingTimes[book.id] ?? 0}
+                                                />
+                                            ))}
+                                        </div>
+                                        <div className="shelf-ledge" />
+                                        <div className="shelf-plates">
+                                            {row.map(book => (
+                                                <span
+                                                    key={book.id}
+                                                    className={`shelf-plate ${(book.progress || 0) >= 100 ? 'done' : ''}`}
+                                                >
+                                                    {shelfLabel(book)}
+                                                </span>
+                                            ))}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </>
                 )}
             </main>
 

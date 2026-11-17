@@ -384,26 +384,148 @@
     white-space: nowrap;
 }
 
-/* ─── Grid View ──────────────────────────────────────── */
+/* ─── Shelf header (sort + view) ───────────────────── */
 
-.library-grid {
+.shelf-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 26px 0 4px;
+    animation: fadeIn 0.6s ease both 0.1s;
+}
+
+.shelf-head-text {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    min-width: 0;
+}
+
+.shelf-head-title {
+    font-family: var(--font-serif);
+    font-weight: 400;
+    font-size: 1.45rem;
+    color: var(--text);
+    white-space: nowrap;
+}
+
+.shelf-head-count {
+    font-size: 0.74rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.shelf-head-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.sort-select-wrap {
+    position: relative;
+}
+
+.sort-select {
+    appearance: none;
+    -webkit-appearance: none;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-pill);
+    color: var(--text);
+    padding: 7px 30px 7px 12px;
+    font-family: var(--font-sans);
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    outline: none;
+    transition: border-color var(--transition-fast);
+}
+
+.sort-select:focus-visible {
+    border-color: var(--accent);
+}
+
+.sort-icon-wrap {
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-secondary);
+    pointer-events: none;
+    display: flex;
+}
+
+.view-toggle {
+    width: 34px;
+    height: 34px;
+    border: 1px solid var(--border);
+}
+
+/* ─── Shelves ────────────────────────────────────────── */
+
+.shelves {
+    display: flex;
+    flex-direction: column;
+    gap: 26px;
+    padding-top: 22px;
+}
+
+.shelf-row,
+.shelf-plates {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
-    gap: 22px 14px;
+    grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
+    column-gap: clamp(14px, 3vw, 26px);
+    padding: 0 clamp(8px, 2vw, 18px);
 }
 
-@media (min-width: 700px) {
-    .library-grid {
-        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-        gap: 28px 18px;
-    }
+.shelf-row {
+    align-items: end;
+    position: relative;
+    z-index: 1;
 }
 
-@media (min-width: 1024px) {
-    .library-grid {
-        grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-        gap: 32px 22px;
-    }
+.shelf-row:has(.menu-open) {
+    z-index: 5;
+}
+
+.shelf-ledge {
+    position: relative;
+    height: 14px;
+    margin: -2px 2px 0;
+    border-radius: 3px 3px 7px 7px;
+    background: linear-gradient(var(--wood-1), var(--wood-2) 55%, var(--wood-3));
+    box-shadow: 0 10px 16px -8px var(--shelf-shadow), inset 0 1px 0 rgba(255,255,255,0.35);
+    transform-origin: left;
+    animation: ledgeIn 0.7s var(--ease-out) backwards;
+}
+
+[data-theme-mode="dark"] .shelf-ledge {
+    box-shadow: 0 10px 16px -8px var(--shelf-shadow), inset 0 1px 0 rgba(255,255,255,0.08);
+}
+
+@keyframes ledgeIn {
+    from { transform: scaleX(0.6); opacity: 0; }
+}
+
+.shelf-plates {
+    padding-top: 9px;
+}
+
+.shelf-plate {
+    font-size: 0.66rem;
+    font-weight: 700;
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.shelf-plate.done {
+    color: var(--accent-deep);
 }
 
 /* ─── List View ──────────────────────────────────────── */
@@ -411,7 +533,8 @@
 .library-list {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 2px;
+    padding-top: 12px;
 }
 
 /* ─── Empty State ────────────────────────────────────── */
@@ -538,14 +661,8 @@
 /* ─── Responsive ─────────────────────────────────────── */
 
 @media (max-width: 500px) {
-    .library-page {
-        zoom: 0.72;
-    }
-
-    /* The 0.72 zoom above shrinks this padding as well, so it is scaled up to
-       still clear the (unzoomed) bottom navigation. */
     .library-content {
-        padding: 20px 16px calc(122px + var(--safe-bottom) / 0.72);
+        padding: 18px 16px calc(96px + var(--safe-bottom));
     }
 
     .search-section {
@@ -554,6 +671,10 @@
 
     .search-bar {
         padding: 4px 4px 4px 12px;
+    }
+
+    .search-input {
+        font-size: 16px; /* stops iOS zooming into the field */
     }
 
     .search-btn {
@@ -565,7 +686,15 @@
         grid-template-columns: 1fr;
     }
 
-    .library-content {
-        padding: 16px;
+    .shelf-head-title {
+        font-size: 1.3rem;
     }
+
+    .sort-select {
+        max-width: 132px;
+    }
+}
+
+.search-result-cover .cover-art-author {
+    display: none;
 }

@@ -9,11 +9,28 @@
     display: flex;
     justify-content: center;
     gap: 4px;
-    padding: 6px max(10px, var(--safe-left)) max(6px, var(--safe-bottom)) max(10px, var(--safe-right));
-    background: var(--surface);
-    backdrop-filter: blur(14px);
-    -webkit-backdrop-filter: blur(14px);
+    padding: 8px max(10px, var(--safe-left)) max(8px, var(--safe-bottom)) max(10px, var(--safe-right));
+    background: color-mix(in srgb, var(--surface) 88%, transparent);
+    backdrop-filter: blur(14px) saturate(1.2);
+    -webkit-backdrop-filter: blur(14px) saturate(1.2);
     border-top: 1px solid var(--border);
+}
+
+.bottom-nav-ribbon {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 14px;
+    height: 18px;
+    background: var(--accent-secondary);
+    clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 70%, 0 100%);
+    transition: transform 0.5s var(--ease-spring);
+    animation: ribbonDrop 0.6s var(--ease-spring) backwards 0.2s;
+    pointer-events: none;
+}
+
+@keyframes ribbonDrop {
+    from { height: 0; }
 }
 
 .bottom-nav-item {
@@ -24,11 +41,19 @@
     align-items: center;
     justify-content: center;
     gap: 3px;
-    padding: 7px 4px 6px;
-    border-radius: var(--radius-md);
+    padding: 10px 4px 4px;
     color: var(--text-secondary);
     text-decoration: none;
-    transition: color var(--transition-fast), background var(--transition-fast);
+    transition: color var(--transition-normal);
+    -webkit-tap-highlight-color: transparent;
+}
+
+.bottom-nav-item svg {
+    transition: transform 0.4s var(--ease-spring);
+}
+
+.bottom-nav-item:active svg {
+    transform: scale(0.85);
 }
 
 .bottom-nav-item:hover {
@@ -36,22 +61,11 @@
 }
 
 .bottom-nav-item.active {
-    color: var(--accent);
-    background: var(--surface-warm);
+    color: var(--text);
 }
 
 .bottom-nav-label {
-    font-size: 0.68rem;
-    letter-spacing: 0.4px;
-    font-weight: 500;
-}
-
-@media (max-width: 500px) {
-    .bottom-nav-label {
-        font-size: 0.62rem;
-    }
-
-    .bottom-nav-item {
-        padding: 6px 4px 5px;
-    }
+    font-size: 0.66rem;
+    letter-spacing: 0.3px;
+    font-weight: 700;
 }

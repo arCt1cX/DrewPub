@@ -1,0 +1,77 @@
+/* ─── Generated covers ───────────────────────────────── */
+
+.cover-art {
+    container-type: inline-size;
+    position: relative;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 10% 9% 8%;
+    overflow: hidden;
+    isolation: isolate;
+    color: #FFF8EC;
+    background: linear-gradient(160deg, var(--c1), var(--c2));
+    text-align: left;
+}
+
+.cover-art::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    opacity: 0.5;
+}
+
+.cover-art-m0::before {
+    background:
+        radial-gradient(circle at 68% 60%, rgba(255,240,210,0.55) 0 17%, transparent 17.5%),
+        radial-gradient(circle at 68% 60%, transparent 0 25%, rgba(255,240,210,0.25) 25.5% 26.5%, transparent 27%);
+}
+
+.cover-art-m1::before {
+    background: repeating-radial-gradient(circle at 50% 120%, transparent 0 9cqw, rgba(255,240,210,0.22) 9cqw 10cqw);
+}
+
+.cover-art-m2::before {
+    background: repeating-linear-gradient(-35deg, transparent 0 7cqw, rgba(255,240,210,0.14) 7cqw 8cqw);
+}
+
+.cover-art-m3::before {
+    background:
+        radial-gradient(ellipse 90% 40% at 50% 100%, rgba(255,240,210,0.35) 0 60%, transparent 61%),
+        linear-gradient(transparent 62%, rgba(0,0,0,0.08) 62%);
+}
+
+.cover-art-title {
+    font-family: var(--font-serif);
+    font-style: italic;
+    font-size: 15cqw;
+    line-height: 0.98;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 5;
+    -webkit-box-orient: vertical;
+}
+
+.cover-art-author {
+    font-family: var(--font-sans);
+    font-size: 6cqw;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    opacity: 0.85;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.book-cover-img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}

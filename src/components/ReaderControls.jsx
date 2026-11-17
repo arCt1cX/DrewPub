@@ -9,6 +9,7 @@ export default function ReaderControls({
     progress,
     currentPage,
     totalPages,
+    chapterPos,
     onBack,
     onToggleToc,
     onToggleSettings,
@@ -52,12 +53,19 @@ export default function ReaderControls({
                     <IconArrowLeft size={18} />
                 </button>
                 <div className="reader-progress-section">
-                    <div className="reader-progress-bar">
-                        <div className="reader-progress-fill" style={{ width: `${progress}%` }} />
+                    <div className="reader-progress-mark" style={{ '--p': `${progress}%` }}>
+                        <div className="reader-progress-bar">
+                            <div className="reader-progress-fill" />
+                        </div>
+                        <span className="reader-progress-ribbon" />
                     </div>
                     <div className="reader-progress-info">
                         <span>{progress}%</span>
-                        {totalPages > 0 && (
+                        {isPaginated && chapterPos?.total > 1 ? (
+                            <span className="reader-page-info">
+                                Page {chapterPos.page} of {chapterPos.total} in chapter
+                            </span>
+                        ) : totalPages > 0 && (
                             <span className="reader-page-info">
                                 {currentPage} / {totalPages}
                             </span>

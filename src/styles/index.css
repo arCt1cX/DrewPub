@@ -30,6 +30,14 @@
   --shadow-lg: 0 10px 24px -8px rgba(70,55,40,0.18);
   --shadow-cover: 0 1px 0 rgba(255,255,255,0.2) inset, 0 10px 24px -8px rgba(70,55,40,0.25), 0 2px 4px rgba(0,0,0,0.08);
 
+  /* Shelf woodwork */
+  --wood-1: #E6D3B3;
+  --wood-2: #CFB48C;
+  --wood-3: #B8986C;
+  --shelf-shadow: rgba(70,55,40,0.26);
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-spring: cubic-bezier(0.34, 1.45, 0.64, 1);
+
   --transition-fast: 0.15s cubic-bezier(0.4, 0, 0.2, 1);
   --transition-normal: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   --transition-slow: 0.4s cubic-bezier(0.4, 0, 0.2, 1);
@@ -52,6 +60,10 @@
   --shadow-md: 0 4px 16px rgba(0,0,0,0.3);
   --shadow-lg: 0 10px 24px rgba(0,0,0,0.4);
   --shadow-cover: 0 10px 24px rgba(0,0,0,0.4);
+  --wood-1: #5A4634;
+  --wood-2: #46362A;
+  --wood-3: #33271D;
+  --shelf-shadow: rgba(0,0,0,0.6);
 }
 
 *, *::before, *::after {
@@ -340,6 +352,17 @@ input[type="color"]::-webkit-color-swatch-wrapper {
 input[type="color"]::-webkit-color-swatch {
   border: none;
   border-radius: 4px;
+}
+
+/* ─── Reduced motion ─────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0s !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 /* ─── Selection ─────────────────────────────────────────── */

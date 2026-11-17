@@ -74,3 +74,28 @@
     color: var(--text-secondary);
     z-index: 10;
 }
+
+/* ─── Page edges (paginated mode) ────────────────────── */
+
+.page-edges {
+    position: fixed;
+    top: calc(var(--safe-top) + 18px);
+    bottom: calc(var(--safe-bottom) + 18px);
+    z-index: 62;
+    pointer-events: none;
+    background: repeating-linear-gradient(90deg, var(--border-strong) 0 1px, transparent 1px 3px);
+    transition: width 0.6s cubic-bezier(0.2, 0.8, 0.2, 1);
+    opacity: 0.9;
+}
+
+.page-edges-left {
+    left: max(4px, var(--safe-left));
+}
+
+.page-edges-right {
+    right: max(4px, var(--safe-right));
+}
+
+[data-theme-mode="dark"] .page-edges {
+    background: repeating-linear-gradient(90deg, rgba(255,255,255,0.09) 0 1px, transparent 1px 3px);
+}
