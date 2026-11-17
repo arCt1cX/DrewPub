@@ -463,3 +463,5 @@ export async function getReadingTimeByBook() {
     }
     return totals;
 }
+
+export { getDB };

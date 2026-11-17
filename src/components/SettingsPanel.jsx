@@ -3,6 +3,7 @@ import { useSettings } from '../contexts/SettingsContext';
 import { FONTS, THEMES, getTheme } from '../styles/themes';
 import { VOICE_PRESETS } from '../utils/ttsEngine';
 import { IconClose, IconPlus, IconCloud, IconMic, IconBookOpen, IconHighlighter, IconVolume } from './Icons';
+import BackupSection from './BackupSection';
 import './SettingsPanel.css';
 
 export default function SettingsPanel({ onClose }) {
@@ -82,6 +83,8 @@ export default function SettingsPanel({ onClose }) {
                 </div>
 
                 <div className="settings-body">
+                    <BackupSection />
+
                     {/* ─── Reading Mode ────────────────────── */}
                     <section className="settings-card">
                         <h3 className="section-label">Reading Mode</h3>

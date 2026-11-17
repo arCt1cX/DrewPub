@@ -23,6 +23,7 @@
     background: none;
     padding: 0;
     cursor: pointer;
+    animation: fadeIn 0.5s ease backwards 0.1s;
 }
 
 .continue-book-wrap::after {
@@ -57,7 +58,7 @@
 }
 
 @keyframes continueOpenIn {
-    from { transform: translateX(-16px) rotateY(-75deg); opacity: 0; }
+    from { transform: translateX(-16px) rotateY(-75deg); }
 }
 
 .continue-book-front {

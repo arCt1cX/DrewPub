@@ -390,3 +390,47 @@
     border: 1px solid var(--border);
     flex-shrink: 0;
 }
+
+/* ─── Backup ─────────────────────────────────────────── */
+
+.backup-desc,
+.backup-note {
+    font-size: 0.8rem;
+    line-height: 1.45;
+    color: var(--text-secondary);
+    margin-bottom: 12px;
+}
+
+.backup-note {
+    margin: 10px 0 0;
+    font-size: 0.74rem;
+}
+
+.backup-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.backup-actions .toggle-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    font-weight: 600;
+}
+
+.backup-actions .toggle-btn:disabled {
+    opacity: 0.5;
+    cursor: wait;
+}
+
+.backup-status {
+    margin-top: 10px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--text);
+}
+
+.backup-status.busy {
+    animation: pulse 1.4s ease-in-out infinite;
+}
